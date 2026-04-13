@@ -2,6 +2,11 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use crossterm::event::{self, Event, KeyEventKind};
+use std::time::Duration;
+use tuir_tui::pages::subreddit::SubredditPage;
+use tuir_tui::pages::Page;
+use tuir_tui::terminal::{init, restore};
 
 /// ASCII art banner for tuir
 const BANNER: &str = r#"
@@ -56,7 +61,6 @@ enum Commands {
 }
 
 impl Cli {
-    /// Print the ASCII banner
     fn print_banner(&self) {
         if !self.no_banner {
             println!("{}", BANNER);
@@ -98,9 +102,6 @@ fn main() -> Result<()> {
         }
         None => {
             cli.print_banner();
-            if let Some(sub) = &cli.subreddit {
-                tracing::info!("Starting TUI with subreddit: {}", sub);
-            }
             do_tui(cli.subreddit.as_deref())?;
         }
     }
@@ -114,8 +115,49 @@ fn do_tui(subreddit: Option<&str>) -> Result<()> {
     if let Some(sub) = subreddit {
         println!("[TUI] Opening r/{}", sub);
     }
-    println!("[TUI] TUI not yet implemented (M3 in progress)");
-    println!("[TUI] Use --help to see available commands");
+
+    // Initialize terminal
+    let mut terminal = init()?;
+
+    // Create and load subreddit page
+    let mut page = SubredditPage::new(subreddit.unwrap_or(""));
+
+    // Load data synchronously using blocking tokio runtime
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        page.load().await;
+    });
+
+    // Event loop
+    loop {
+        // Draw
+        terminal.draw(|f| {
+            page.render(f);
+        })?;
+
+        // Poll for input
+        match event::poll(Duration::from_millis(100)) {
+            Ok(true) => {
+                if let Ok(Event::Key(key)) = event::read() {
+                    if key.kind == KeyEventKind::Press {
+                        let action = page.handle_key(key);
+                        if action == tuir_tui::pages::PageAction::Quit {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(false) => {}
+            Err(_) => break,
+        }
+    }
+
+    // Restore terminal
+    restore()?;
+
+    println!("[TUI] Exited TUI mode");
     Ok(())
 }
 
