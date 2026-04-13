@@ -2,6 +2,11 @@
 /target/
 **/*.rs.bk
 
+# Craft Agent / Session files
+.omc/
+.omx/
+plan/
+
 # IDE
 .idea/
 .vscode/
