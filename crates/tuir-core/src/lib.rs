@@ -8,8 +8,10 @@ pub mod content;
 pub mod mailcap;
 pub mod oauth;
 pub mod reddit;
+pub mod theme;
 
 pub use anyhow::Result;
 pub use config::Config;
 pub use oauth::OAuth;
 pub use reddit::RedditClient;
+pub use theme::{Theme, ThemeElement, ThemeError};
