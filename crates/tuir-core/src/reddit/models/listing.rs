@@ -13,7 +13,17 @@ pub struct Listing<T> {
 pub struct ListingData<T> {
     pub modhash: Option<String>,
     pub dist: Option<i64>,
-    pub children: Vec<T>,
+    #[serde(rename = "children")]
+    pub children: Vec<Thing<T>>,
     pub after: Option<String>,
     pub before: Option<String>,
+}
+
+/// A thing wrapper (t1_, t3_, t5_, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Thing<T> {
+    #[serde(rename = "kind")]
+    pub kind: String,
+    #[serde(rename = "data")]
+    pub data: T,
 }

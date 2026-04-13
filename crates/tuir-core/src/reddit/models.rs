@@ -6,8 +6,8 @@ pub mod message;
 pub mod submission;
 pub mod subreddit;
 
-pub use comment::Comment;
-pub use listing::Listing;
-pub use message::Message;
-pub use submission::Submission;
-pub use subreddit::Subreddit;
+pub use comment::{Comment, CommentReplies, CommentWrapper, MoreComments};
+pub use listing::{Listing, ListingData, Thing};
+pub use message::{Message, MessageWrapper};
+pub use submission::{EditedField, Submission, SubmissionWrapper, VoteState};
+pub use subreddit::{Subreddit, SubredditWrapper};
