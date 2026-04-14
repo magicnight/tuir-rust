@@ -1,12 +1,12 @@
 //! Subreddit listing page
 
 use crate::keymap::KeyAction;
+use crate::theme::AppTheme;
 use crate::widgets::{render_submission_list, SortOrder, VoteState};
 use crate::PageAction;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::Style,
     widgets::{Block, BorderType, Borders, ListState},
     Frame,
 };
@@ -23,6 +23,7 @@ pub struct SubredditPage {
     pub list_state: ListState,
     pub loading: bool,
     pub client: Arc<dyn RedditApi>,
+    pub theme: Arc<AppTheme>,
 }
 
 impl SubredditPage {
@@ -39,7 +40,15 @@ impl SubredditPage {
             list_state: ListState::default(),
             loading: false,
             client,
+            theme: Arc::new(AppTheme::default()),
         }
+    }
+
+    /// Inject a shared theme. Pages start with [`AppTheme::default`] and the
+    /// CLI calls this after construction once the user-configured theme has
+    /// been resolved.
+    pub fn set_theme(&mut self, theme: Arc<AppTheme>) {
+        self.theme = theme;
     }
 
     pub fn subreddit_display(&self) -> &str {
@@ -206,7 +215,7 @@ impl crate::pages::Page for SubredditPage {
             .title(header_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(ratatui::style::Color::Rgb(20, 20, 30)));
+            .style(self.theme.header);
 
         frame.render_widget(header, chunks[0]);
 
@@ -225,7 +234,7 @@ impl crate::pages::Page for SubredditPage {
             .title(footer_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(ratatui::style::Color::Rgb(30, 30, 20)));
+            .style(self.theme.footer);
 
         frame.render_widget(footer, chunks[2]);
     }
@@ -328,6 +337,22 @@ mod tests {
         page.load_sync();
         page.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::empty()));
         assert_eq!(page.sort, SortOrder::Rising);
+    }
+
+    #[test]
+    fn set_theme_replaces_default_palette() {
+        use std::sync::Arc;
+        use tuir_core::theme::Theme;
+
+        let mut page = SubredditPage::new("rust");
+        // Default theme uses RGB; molokai uses Indexed colors.
+        let molokai = Arc::new(crate::theme::AppTheme::from_core(&Theme::molokai()));
+        page.set_theme(Arc::clone(&molokai));
+        assert_eq!(page.theme.name, "molokai");
+        assert_eq!(
+            page.theme.selected.bg,
+            Some(ratatui::style::Color::Indexed(236))
+        );
     }
 
     #[test]

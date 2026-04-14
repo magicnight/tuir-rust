@@ -16,6 +16,7 @@ use tuir_tui::pages::{
     subreddit::SubredditPage, subscription::SubscriptionPage, Page, PageAction, PageKind,
 };
 use tuir_tui::terminal::{init, restore, TerminalType};
+use tuir_tui::theme::AppTheme;
 
 const MIN_HERO_WIDTH: u16 = 72;
 
@@ -281,6 +282,22 @@ fn build_client(config: &Config) -> Arc<dyn RedditApi> {
     Arc::new(client)
 }
 
+/// Resolve the configured theme into an [`AppTheme`], falling back to the
+/// built-in legacy palette when no theme is configured or the configured
+/// name resolves to nothing.
+fn build_theme(config: &Config) -> Arc<AppTheme> {
+    match config.resolve_theme() {
+        Some(core_theme) => {
+            tracing::info!("loaded theme: {}", core_theme.name);
+            Arc::new(AppTheme::from_core(&core_theme))
+        }
+        None => {
+            tracing::debug!("no theme configured; using built-in defaults");
+            Arc::new(AppTheme::default())
+        }
+    }
+}
+
 /// Enter TUI mode
 fn do_tui(subreddit: Option<&str>) -> Result<()> {
     println!("[TUI] Starting terminal interface...");
@@ -290,7 +307,9 @@ fn do_tui(subreddit: Option<&str>) -> Result<()> {
 
     let config = Config::load().unwrap_or_default();
     let client = build_client(&config);
+    let theme = build_theme(&config);
     let mut page = SubredditPage::with_client(subreddit.unwrap_or(""), client);
+    page.set_theme(Arc::clone(&theme));
     page.load_sync();
     run_app(AppPage::Subreddit(page))?;
 

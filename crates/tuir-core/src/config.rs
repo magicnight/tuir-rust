@@ -339,6 +339,33 @@ impl Config {
     pub fn themes_dir() -> PathBuf {
         Self::config_dir().join("themes")
     }
+
+    /// Resolve the configured theme into a parsed [`crate::theme::Theme`].
+    ///
+    /// Lookup order:
+    /// 1. `<themes_dir>/<name>.cfg` (user override)
+    /// 2. The matching built-in theme by name
+    ///
+    /// Returns `None` when no theme is configured or the configured name
+    /// matches neither a file nor a built-in.
+    pub fn resolve_theme(&self) -> Option<crate::theme::Theme> {
+        let name = self.appearance.theme.as_deref()?.trim();
+        if name.is_empty() {
+            return None;
+        }
+
+        let user_path = Self::themes_dir().join(format!("{name}.cfg"));
+        if user_path.exists() {
+            match crate::theme::Theme::from_file(&user_path) {
+                Ok(theme) => return Some(theme),
+                Err(err) => {
+                    tracing::warn!("failed to load theme {}: {err}", user_path.display());
+                }
+            }
+        }
+
+        crate::theme::Theme::from_name(name)
+    }
 }
 
 #[cfg(test)]
