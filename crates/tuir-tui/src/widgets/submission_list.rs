@@ -46,9 +46,12 @@ impl SortOrder {
 }
 
 /// Format a single submission as a Line, styled via [`AppTheme`].
+///
+/// Argument order matches the rest of the page formatters: data first,
+/// any UI-state in the middle, theme last.
 pub fn format_submission(
-    idx: usize,
     sub: &Submission,
+    idx: usize,
     vote: VoteState,
     theme: &AppTheme,
 ) -> Line<'static> {
@@ -114,7 +117,7 @@ pub fn render_submission_list(
         .enumerate()
         .map(|(i, sub)| {
             let vote = vote_states.get(i).copied().unwrap_or_default();
-            let line = format_submission(i, sub, vote, theme);
+            let line = format_submission(sub, i, vote, theme);
             ListItem::new(line)
         })
         .collect();

@@ -502,7 +502,6 @@ fn auth_output(config: &Config, user: Option<&str>) -> String {
     lines.push(String::new());
     lines.push(format!("  {}", oauth.auth_url()));
     lines.push(String::new());
-    lines.push("[AUTH] Token exchange is not implemented yet; this command currently validates config and prepares the browser step.".to_string());
 
     lines.join("\n")
 }

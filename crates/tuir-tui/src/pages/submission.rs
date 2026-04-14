@@ -22,7 +22,6 @@ use tuir_core::reddit::{MockRedditClient, RedditApi};
 pub struct CommentNode {
     pub comment: Comment,
     pub collapsed: bool,
-    pub visible: bool,
     pub reply_count: usize,
 }
 
@@ -31,7 +30,6 @@ impl CommentNode {
         Self {
             comment,
             collapsed: false,
-            visible: true,
             reply_count: 0,
         }
     }
