@@ -13,7 +13,7 @@ use ratatui::Frame;
 use std::future::Future;
 
 /// Page action returned by key handlers
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageAction {
     /// Continue rendering this page
     None,
@@ -23,6 +23,11 @@ pub enum PageAction {
     Switch(PageKind),
     /// Exit the application
     Quit,
+    /// Suspend the TUI, hand the terminal off to an external program
+    /// resolved via mailcap for the given URL, then resume. The CLI
+    /// event loop is responsible for the mailcap lookup and the
+    /// suspend/spawn/resume dance — pages just signal intent.
+    OpenExternal(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

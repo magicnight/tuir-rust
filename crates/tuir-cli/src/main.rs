@@ -601,6 +601,11 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
                                     stack.push(next_page);
                                 }
                             }
+                            PageAction::OpenExternal(url) => {
+                                if let Err(err) = open_external(terminal, &url) {
+                                    tracing::error!("external viewer failed: {err}");
+                                }
+                            }
                             PageAction::None => {}
                         }
                     }
@@ -619,6 +624,38 @@ fn is_help_shortcut(key: &crossterm::event::KeyEvent) -> bool {
         key.code,
         crossterm::event::KeyCode::Char('?')
     )
+}
+
+/// Suspend the TUI, spawn the mailcap-resolved external viewer for
+/// `url`, wait for it to exit, then re-arm the alternate screen and
+/// raw mode. Any failure short-circuits without leaving the terminal
+/// in a broken state because [`tuir_tui::terminal::resume`] is called
+/// from a guard regardless.
+fn open_external(terminal: &mut TerminalType, url: &str) -> Result<()> {
+    use tuir_core::mailcap::Mailcap;
+    use tuir_tui::terminal::{resume, suspend};
+
+    let mailcap = Mailcap::load_default()
+        .map_err(|e| anyhow::anyhow!("could not load mailcap: {e}"))?;
+    let entry = mailcap
+        .find_for_url(url)
+        .ok_or_else(|| anyhow::anyhow!("no mailcap entry for {url}"))?;
+    let command = entry.expand(url);
+    tracing::info!("launching external viewer: {command}");
+
+    suspend(terminal)?;
+    let spawn_result = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .status();
+    let resume_result = resume(terminal);
+
+    match (spawn_result, resume_result) {
+        (Ok(status), Ok(())) if status.success() => Ok(()),
+        (Ok(status), Ok(())) => Err(anyhow::anyhow!("viewer exited with {status}")),
+        (Err(spawn_err), _) => Err(anyhow::anyhow!("spawn failed: {spawn_err}")),
+        (_, Err(resume_err)) => Err(anyhow::anyhow!("resume failed: {resume_err}")),
+    }
 }
 
 fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage> {

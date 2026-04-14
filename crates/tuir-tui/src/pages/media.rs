@@ -242,7 +242,7 @@ impl Page for MediaPage {
         }
 
         let footer = Block::default()
-            .title(" ?:Help | q:Back ")
+            .title(" o:External viewer | ?:Help | q:Back ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .style(self.theme.footer);
@@ -256,6 +256,11 @@ impl Page for MediaPage {
         if let Some(action) = KeyAction::from_key(key.code, key.modifiers) {
             return match action {
                 KeyAction::Quit | KeyAction::Back => PageAction::Back,
+                // Open / o → hand the URL to the external mailcap viewer
+                // regardless of whether the inline renderer succeeded.
+                // Useful for galleries, videos, and "I want this in my
+                // real image viewer" cases.
+                KeyAction::Open => PageAction::OpenExternal(self.media.url.clone()),
                 _ => PageAction::None,
             };
         }
