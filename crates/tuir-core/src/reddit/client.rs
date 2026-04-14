@@ -177,9 +177,8 @@ impl RedditApi for RedditClient {
         endpoints::read_message(self, id).await
     }
 
-    async fn mark_unread(&self, _id: &str) -> Result<()> {
-        // Reddit's /api/unread_message is not yet wired in endpoints.rs.
-        Err(anyhow!("mark_unread not implemented for real client"))
+    async fn mark_unread(&self, id: &str) -> Result<()> {
+        endpoints::unread_message(self, id).await
     }
 
     async fn subscribed(&self, limit: usize) -> Result<Listing<Subreddit>> {

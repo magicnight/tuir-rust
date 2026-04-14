@@ -120,6 +120,13 @@ pub async fn read_message(client: &RedditClient, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Mark message as unread
+pub async fn unread_message(client: &RedditClient, id: &str) -> Result<()> {
+    let path = "/api/unread_message";
+    client.post(path, &[("id", id)]).await?;
+    Ok(())
+}
+
 /// Get subscribed subreddits
 pub async fn subscribed(client: &RedditClient, limit: usize) -> Result<Listing<Subreddit>> {
     let path = format!("/subreddits/mine/subscriber?limit={}", limit);
