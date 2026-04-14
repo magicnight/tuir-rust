@@ -177,7 +177,7 @@ tuir-rust/
 
 ## 8. 当前进度（live）
 
-最后更新：在 `feat(media): async download + spinner via worker thread` (`10c6610`) commit 之后。M9 相关的三项后续（GIF 帧循环、主题化评论深度色、异步下载范式）已随主干 M10+ 候选项并入。
+最后更新：在 `refactor(media): eliminate per-tick Vec allocation, tighten visibility` (`e295c43`) commit 之后。本轮把 4 个 M10+ 小/中候选项消化掉（GIF 帧循环、主题化评论深度色、异步下载范式、`auth_output` 瘦身），并对 media 模块做了一次 simplify 评审清理。
 
 | 里程碑 | 状态 | 关键 commit |
 |---|---|---|
@@ -190,7 +190,7 @@ tuir-rust/
 | M6 — 主题/视觉一致化 | ✅ | `4e32d22` 主题接入 SubredditPage、`98ca493` 全页面迁移、`77e4116` header 锚点统一 |
 | M7 — OAuth token 全流程 | ✅ | `de5dac4` token 交换 + 持久化、`d0fb0a0` tiny_http 回调监听器 |
 | M8 — Sort/Goto/Help/HTML 渲染 | ✅ | `5d9f084` 1-5 sort、`8c04a68` `/` goto、`f9310c2` HelpPage、`8ac7933` content 渲染 |
-| **M9 — 媒体预览** | ✅ | `125a01a` 识别+config、`5068b4c` MediaPage 骨架、`99d8155` 内嵌 image 渲染、`4621966` mailcap 外部 viewer |
+| **M9 — 媒体预览** | ✅ | `125a01a` 识别+config、`5068b4c` MediaPage 骨架、`99d8155` 内嵌 image 渲染、`4621966` mailcap 外部 viewer、`0c66e70` GIF 帧循环、`10c6610` 异步下载+spinner、`e295c43` 热路径精简 |
 
 `tuir auth` + `~/.config/tuir/tuir.cfg` 配 `oauth_client_id` 即可登录真实 Reddit；未登录时所有页面 fallback 到 `MockRedditClient`。
 
@@ -243,3 +243,4 @@ tuir-rust/
 | 2026-04-14 4621966 | mailcap 命令通过 `sh -c` 启动 | 让用户的 `feh %s args` 之类组合命令直接生效；URL 已 shell-quoted |
 | 2026-04-15 0c66e70 | `Page::tick()` 默认 no-op + CLI 每帧调用 | 不想把时间驱动逻辑散落进 render；MediaPage 的 GIF 帧推进是第一个用户，后续 spinner/轮询都复用同一入口 |
 | 2026-04-15 10c6610 | 媒体下载走独立 `std::thread` + 线程内单线程 `tokio` runtime，不引入全局 runtime | 单次下载不值得给整个 TUI 背一个长生命周期 runtime；`mpsc::Receiver` + `try_recv` 在 `tick()` 里消费即可，页面切走时 receiver 被 drop，worker 发送静默失败 |
+| 2026-04-15 e295c43 | `advance_gif_index` 改收 `impl Fn(usize) -> Duration`，tick 不再 collect 临时 `Vec<Duration>` | 每秒 ~10 次 alloc/dealloc 是热路径浪费，闭包形式让 tests 用 slice、tick 用 `&anim.frames` 同一份代码两条无 alloc 路径 |

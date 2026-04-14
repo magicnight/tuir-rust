@@ -106,6 +106,8 @@ The browse loop is end-to-end functional — both against the bundled `MockReddi
 - **`/` goto prompt** — type any subreddit name (with or without `r/` prefix), Enter to jump, Esc to cancel
 - **Submission view** — proper recursive comment tree with `c` collapse, HTML body rendering for both `selftext_html` and comment `body_html`
 - **Inline media preview** — press `i` on a submission with image media. Auto-detects [kitty](https://sw.kovidgoyal.net/kitty/graphics-protocol/) / [iTerm2](https://iterm2.com/documentation-images.html) / [Sixel](https://en.wikipedia.org/wiki/Sixel) / Unicode half-blocks. Set `media_style = retro` in your config to **force half-blocks even on capable terminals** for that classic [browsh](https://github.com/browsh-org/browsh) aesthetic.
+- **Animated GIF playback** — multi-frame GIFs decode every frame and loop in place via the page-tick driver, with browser-style 100ms minimum delay
+- **Async media loading** — downloads run on a worker thread; the page shows a braille spinner while bytes stream in, no UI freezes
 - **External viewer** — press `o` to hand any URL to your mailcap-resolved viewer (`feh`, `mpv`, `xdg-open`, …) with proper terminal suspend/resume
 - **Inbox + Subscription pages** — `u` toggle read/unread, navigate into individual messages
 - **HelpPage** — `?` from any page shows the full keybinding reference
@@ -205,10 +207,10 @@ Place custom themes in `~/.config/tuir/themes/` as `.cfg` files.
 | M6 — Theme & visual consistency | ✅ | Every page reads from `Arc<AppTheme>`; unified header anchor |
 | M7 — OAuth full flow | ✅ | `tuir auth` runs the localhost callback listener and stores the token |
 | M8 — Sort / Goto / Help / HTML | ✅ | `1-5` sort, `/` goto prompt, `?` global help, content renderer |
-| **M9 — Inline media preview** | ✅ | image+ratatui-image inline render, `media_style = retro`, mailcap external viewer |
+| **M9 — Inline media preview** | ✅ | image+ratatui-image inline render, `media_style = retro`, mailcap external viewer, animated GIF frame loop, async download with spinner |
 | M10+ — Search / `load more` / Gallery / Posting / Release | 🔜 | See [docs/ROADMAP.md §9](docs/ROADMAP.md) for the full backlog |
 
-**Tests:** 116 unit/integration tests across the workspace, all green. `cargo clippy --all-targets -- -D warnings` is enforced.
+**Tests:** 125 unit/integration tests across the workspace, all green. `cargo clippy --all-targets -- -D warnings` is enforced.
 
 ## Contributing
 
