@@ -31,6 +31,10 @@ pub struct AppTheme {
     pub stickied: Style,
     pub author: Style,
     pub muted: Style,
+    /// 4-cycle of foreground styles for comment body text, indexed by
+    /// `depth % 4`. Maps to the `CursorBar1..4` theme elements — the
+    /// same slot the original urwid tuir used for depth-indent bars.
+    pub comment_depth: [Style; 4],
 }
 
 impl AppTheme {
@@ -48,6 +52,12 @@ impl AppTheme {
             stickied: to_style(&theme.get(ThemeElement::Stickied)),
             author: to_style(&theme.get(ThemeElement::SubmissionAuthor)),
             muted: to_style(&theme.get(ThemeElement::Created)),
+            comment_depth: [
+                to_style(&theme.get(ThemeElement::CursorBar1)),
+                to_style(&theme.get(ThemeElement::CursorBar2)),
+                to_style(&theme.get(ThemeElement::CursorBar3)),
+                to_style(&theme.get(ThemeElement::CursorBar4)),
+            ],
         }
     }
 }
@@ -74,6 +84,12 @@ impl Default for AppTheme {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
             muted: Style::default().fg(Color::DarkGray),
+            comment_depth: [
+                Style::default().fg(Color::Yellow),
+                Style::default().fg(Color::Green),
+                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::Magenta),
+            ],
         }
     }
 }
@@ -142,6 +158,32 @@ mod tests {
         // Selected uses ansi_252/ansi_236 — pick that one to verify bg index.
         assert_eq!(app.selected.fg, Some(Color::Indexed(252)));
         assert_eq!(app.selected.bg, Some(Color::Indexed(236)));
+    }
+
+    #[test]
+    fn default_theme_has_four_distinct_comment_depth_colors() {
+        let theme = AppTheme::default();
+        let fgs: Vec<_> = theme.comment_depth.iter().map(|s| s.fg).collect();
+        assert_eq!(
+            fgs,
+            vec![
+                Some(Color::Yellow),
+                Some(Color::Green),
+                Some(Color::Cyan),
+                Some(Color::Magenta),
+            ]
+        );
+    }
+
+    #[test]
+    fn from_core_pulls_comment_depth_from_cursor_bars() {
+        // Molokai CursorBar1..4 = ansi_141 / 197 / 154 / 208
+        let core = Theme::molokai();
+        let app = AppTheme::from_core(&core);
+        assert_eq!(app.comment_depth[0].fg, Some(Color::Indexed(141)));
+        assert_eq!(app.comment_depth[1].fg, Some(Color::Indexed(197)));
+        assert_eq!(app.comment_depth[2].fg, Some(Color::Indexed(154)));
+        assert_eq!(app.comment_depth[3].fg, Some(Color::Indexed(208)));
     }
 
     #[test]

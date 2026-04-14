@@ -7,7 +7,7 @@ use crate::PageAction;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
@@ -502,13 +502,7 @@ fn format_comment_line<'a>(node: &'a CommentNode, theme: &AppTheme) -> Line<'a> 
             .collect::<String>()
     };
 
-    let depth_color = match depth % 4 {
-        0 => Color::Yellow,
-        1 => Color::Green,
-        2 => Color::Cyan,
-        3 => Color::Magenta,
-        _ => Color::White,
-    };
+    let depth_style = theme.comment_depth[(depth % 4) as usize];
 
     let time = SubmissionPage::format_timestamp(node.comment.created_utc);
 
@@ -529,7 +523,7 @@ fn format_comment_line<'a>(node: &'a CommentNode, theme: &AppTheme) -> Line<'a> 
             theme.muted,
         ));
     } else {
-        spans.push(Span::styled(body_text, Style::default().fg(depth_color)));
+        spans.push(Span::styled(body_text, depth_style));
     }
 
     Line::from(spans)
