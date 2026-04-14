@@ -79,6 +79,12 @@ impl SubmissionPage {
         self.loading = true;
 
         let resp = self.client.submission(&self.submission.id).await;
+        self.submission = resp.submission;
+        self.vote_state = match self.submission.likes.map(i8::from).unwrap_or(0) {
+            1 => VoteState::Up,
+            -1 => VoteState::Down,
+            _ => VoteState::None,
+        };
         self.comments = resp
             .comments
             .into_iter()
@@ -92,6 +98,14 @@ impl SubmissionPage {
         }
 
         self.loading = false;
+    }
+
+    pub fn load_sync(&mut self) {
+        crate::pages::block_on(self.load());
+    }
+
+    pub fn refresh(&mut self) {
+        self.load_sync();
     }
 
     /// Rebuild the flattened view based on collapsed state
@@ -178,6 +192,8 @@ impl SubmissionPage {
 
     /// Vote on submission
     pub fn vote(&mut self, direction: i8) {
+        let old_vote: i8 = self.vote_state.into();
+
         // Update local vote state
         self.vote_state = match direction {
             1 => VoteState::Up,
@@ -186,14 +202,13 @@ impl SubmissionPage {
         };
 
         // Update score
-        let old_vote: i8 = self.vote_state.into();
         let diff = direction - old_vote;
         self.submission.score += diff as i64;
 
         // Send to client
         let client = Arc::clone(&self.client);
         let name = self.submission.name.clone();
-        tokio::spawn(async move {
+        crate::pages::block_on(async move {
             client.vote(&name, direction).await;
         });
     }
@@ -390,18 +405,7 @@ impl crate::pages::Page for SubmissionPage {
             match action {
                 KeyAction::Quit => return PageAction::Quit,
                 KeyAction::Back => return PageAction::Back,
-                KeyAction::Refresh => {
-                    let client = Arc::clone(&self.client);
-                    let id = self.submission.id.clone();
-                    tokio::spawn(async move {
-                        let resp = client.submission(&id).await;
-                        tracing::info!(
-                            "Refreshed submission {} with {} comments",
-                            resp.submission.id,
-                            resp.comments.len()
-                        );
-                    });
-                }
+                KeyAction::Refresh => self.refresh(),
                 KeyAction::NextItem => self.move_down(),
                 KeyAction::PrevItem => self.move_up(),
                 KeyAction::Top => self.move_to_top(),
@@ -496,5 +500,61 @@ impl From<VoteState> for i8 {
             VoteState::Down => -1,
             VoteState::None => 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tuir_core::reddit::models::{EditedField, Submission};
+
+    fn sample_submission(score: i64) -> Submission {
+        Submission {
+            id: "abc123".to_string(),
+            name: "t3_abc123".to_string(),
+            title: "Sample".to_string(),
+            author: "tester".to_string(),
+            subreddit: "rust".to_string(),
+            score,
+            num_comments: 3,
+            permalink: "/r/rust/comments/abc123/sample".to_string(),
+            url: "https://reddit.com/r/rust/comments/abc123/sample".to_string(),
+            selftext: String::new(),
+            created_utc: 1_700_000_000.0,
+            distinguished: None,
+            edited: EditedField::Bool(false),
+            link_flair_text: None,
+            author_flair_text: None,
+            over_18: false,
+            pinned: false,
+            spoiler: false,
+            stickied: false,
+            saved: false,
+            hidden: false,
+            likes: None,
+            url_full: None,
+        }
+    }
+
+    #[test]
+    fn vote_uses_previous_vote_state_when_adjusting_score() {
+        let mut page = SubmissionPage::new(sample_submission(10));
+
+        page.vote(1);
+        assert_eq!(page.submission.score, 11);
+
+        page.vote(-1);
+        assert_eq!(page.submission.score, 9);
+    }
+
+    #[test]
+    fn refresh_preserves_mock_vote_state() {
+        let mut page = SubmissionPage::new(sample_submission(10));
+
+        page.vote(1);
+        page.refresh();
+
+        assert_eq!(page.vote_state, VoteState::Up);
+        assert_eq!(page.submission.likes.map(i8::from), Some(1));
     }
 }

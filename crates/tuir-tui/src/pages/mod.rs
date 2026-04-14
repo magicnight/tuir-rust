@@ -1,12 +1,14 @@
 //! Page trait and implementations
 
 pub mod inbox;
+pub mod message;
 pub mod submission;
 pub mod subreddit;
 pub mod subscription;
 
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
+use std::future::Future;
 
 /// Page action returned by key handlers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,7 @@ pub enum PageAction {
 pub enum PageKind {
     Subreddit,
     Submission,
+    Message,
     Inbox,
     Subscription,
     Help,
@@ -40,4 +43,15 @@ pub trait Page {
 
     /// Title shown in the status bar
     fn title(&self) -> &str;
+}
+
+pub fn block_on<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("page runtime should build")
+        .block_on(future)
 }

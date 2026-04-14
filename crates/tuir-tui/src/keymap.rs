@@ -28,6 +28,7 @@ impl KeyAction {
         match (code, ctrl) {
             (KeyCode::Char('q'), false) => Some(Self::Quit),
             (KeyCode::Char('r'), false) => Some(Self::Refresh),
+            (KeyCode::Enter, false) => Some(Self::Open),
             (KeyCode::Char('o'), false) => Some(Self::Open),
             (KeyCode::Char('a'), false) => Some(Self::VoteUp),
             (KeyCode::Char('z'), false) => Some(Self::VoteDown),
@@ -42,5 +43,18 @@ impl KeyAction {
             (KeyCode::Char('l'), false) => Some(Self::ScrollDown),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enter_maps_to_open() {
+        let action =
+            KeyAction::from_key(KeyCode::Enter, crossterm::event::KeyModifiers::empty());
+
+        assert_eq!(action, Some(KeyAction::Open));
     }
 }

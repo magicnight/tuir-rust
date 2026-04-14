@@ -47,6 +47,14 @@ impl SubscriptionPage {
         self.loading = false;
     }
 
+    pub fn load_sync(&mut self) {
+        crate::pages::block_on(self.load());
+    }
+
+    pub fn refresh(&mut self) {
+        self.load_sync();
+    }
+
     /// Move cursor up
     pub fn move_up(&mut self) {
         if let Some(idx) = self.list_state.selected() {
@@ -232,12 +240,8 @@ impl crate::pages::Page for SubscriptionPage {
             match action {
                 KeyAction::Quit => return PageAction::Quit,
                 KeyAction::Back => return PageAction::Back,
-                KeyAction::Refresh => {
-                    let client = Arc::clone(&self.client);
-                    tokio::spawn(async move {
-                        client.subscribed(50).await;
-                    });
-                }
+                KeyAction::Refresh => self.refresh(),
+                KeyAction::Open => return PageAction::Switch(crate::pages::PageKind::Subreddit),
                 KeyAction::NextItem => self.move_down(),
                 KeyAction::PrevItem => self.move_up(),
                 KeyAction::Top => self.move_to_top(),
@@ -251,5 +255,22 @@ impl crate::pages::Page for SubscriptionPage {
 
     fn title(&self) -> &str {
         "subscriptions"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pages::{Page, PageAction, PageKind};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn open_returns_subreddit_switch() {
+        let mut page = SubscriptionPage::new();
+        page.load_sync();
+
+        let action = page.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(action, PageAction::Switch(PageKind::Subreddit));
     }
 }

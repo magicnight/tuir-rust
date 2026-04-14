@@ -2,32 +2,127 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::{
+    event::{self, Event, KeyEventKind},
+    terminal::size as terminal_size,
+};
 use std::time::Duration;
-use tuir_tui::pages::subreddit::SubredditPage;
-use tuir_tui::pages::Page;
-use tuir_tui::terminal::{init, restore};
+use tuir_core::{config::Config, OAuth};
+use tuir_tui::pages::{
+    inbox::InboxPage, message::MessagePage, submission::SubmissionPage, subreddit::SubredditPage,
+    subscription::SubscriptionPage, Page, PageAction, PageKind,
+};
+use tuir_tui::terminal::{init, restore, TerminalType};
 
-/// ASCII art banner for tuir (Rust color scheme: orange to red gradient)
-const BANNER: &str = concat!(
-    "\n",
-    "\x1b[38;5;215mTTTTTTTTTTTT\x1b[0m\x1b[38;5;215mUU        UU\x1b[0m\x1b[38;5;215mIIIIIIIIIII\x1b[0m\x1b[38;5;215mRRRRRRRRRR  \x1b[0m\n",
-    "\x1b[38;5;215m        TT \x1b[0m\x1b[38;5;215mUU        UU\x1b[0m\x1b[38;5;215m    III    \x1b[0m\x1b[38;5;215mRR        RR\x1b[0m\n",
-    "\x1b[38;5;215m        TT \x1b[0m\x1b[38;5;215mUU        UU\x1b[0m\x1b[38;5;215m    III    \x1b[0m\x1b[38;5;215mRR        RR\x1b[0m\n",
-    "\x1b[38;5;215m        TT \x1b[0m\x1b[38;5;215mUU        UU\x1b[0m\x1b[38;5;215m    III    \x1b[0m\x1b[38;5;215mRRRRRRRRRR  \x1b[0m\n",
-    "\x1b[38;5;215m        TT \x1b[0m\x1b[38;5;215m UU      UU \x1b[0m\x1b[38;5;215m    III    \x1b[0m\x1b[38;5;215mRR   RR   RR\x1b[0m\n",
-    "\x1b[38;5;215m        TT \x1b[0m\x1b[38;5;215m  UUUUUU   \x1b[0m\x1b[38;5;215mIIIIIIIIIII\x1b[0m\x1b[38;5;215mRR     RR  RR\x1b[0m\n",
-    "\n",
-    "\x1b[38;5;196mRRRRRRRRRR  \x1b[0m\x1b[38;5;196mUU        UU\x1b[0m\x1b[38;5;196m SSSSSSSSSS\x1b[0m\x1b[38;5;196mTTTTTTTTTTTT\x1b[0m\n",
-    "\x1b[38;5;196mRR        RR\x1b[0m\x1b[38;5;196mUU        UU\x1b[0m\x1b[38;5;196mSS        \x1b[0m\x1b[38;5;196m        TT \x1b[0m\n",
-    "\x1b[38;5;196mRR        RR\x1b[0m\x1b[38;5;196mUU        UU\x1b[0m\x1b[38;5;196m SSSSSSSSSS\x1b[0m\x1b[38;5;196m        TT \x1b[0m\n",
-    "\x1b[38;5;196mRRRRRRRRRR  \x1b[0m\x1b[38;5;196mUU        UU\x1b[0m\x1b[38;5;196m         SS\x1b[0m\x1b[38;5;196m        TT \x1b[0m\n",
-    "\x1b[38;5;196mRR   RR   RR\x1b[0m\x1b[38;5;196m UU      UU \x1b[0m\x1b[38;5;196mSS        \x1b[0m\x1b[38;5;196m        TT \x1b[0m\n",
-    "\x1b[38;5;196mRR     RR  RR\x1b[0m\x1b[38;5;196m  UUUUUU   \x1b[0m\x1b[38;5;196m SSSSSSSSSS\x1b[0m\x1b[38;5;196m        TT \x1b[0m\n",
-    "\n",
-    "\x1b[38;5;220m  Terminal UI for Reddit -- Rust Rewrite\x1b[0m\n",
-    "\n",
-);
+const HERO_PIXEL_WIDTH: usize = 2;
+const COMPACT_PIXEL_WIDTH: usize = 2;
+const MIN_3D_WIDTH: u16 = 72;
+const HERO_TOP_ROWS: [&str; 5] = [
+    "########  ##  ##  ####  ###### ",
+    "   ##     ##  ##   ##   ##   ##",
+    "   ##     ##  ##   ##   #####  ",
+    "   ##     ##  ##   ##   ## ##  ",
+    "   ##      ####   ####  ##  ## ",
+];
+
+const HERO_BOTTOM_ROWS: [&str; 5] = [
+    "######   ##  ##   ####   ########",
+    "##   ##  ##  ##  ##         ##   ",
+    "######   ##  ##   ####      ##   ",
+    "## ##    ##  ##      ##     ##   ",
+    "##  ##    ####    ####      ##   ",
+];
+
+const COMPACT_TOP_ROWS: [&str; 3] = [
+    "##### ## ## ### #### ",
+    "  #   ## ##  #  ## ##",
+    "  #    ###  ### ## ##",
+];
+
+const COMPACT_BOTTOM_ROWS: [&str; 3] = [
+    "#### ## ## ### ####",
+    "## # ## ##  ##  ## ",
+    "## ## ###  ###  ## ",
+];
+
+fn banner_for_width(width: Option<u16>) -> String {
+    match width {
+        Some(width) if width >= MIN_3D_WIDTH => {
+            render_banner(&HERO_TOP_ROWS, &HERO_BOTTOM_ROWS, HERO_PIXEL_WIDTH)
+        }
+        _ => render_banner(&COMPACT_TOP_ROWS, &COMPACT_BOTTOM_ROWS, COMPACT_PIXEL_WIDTH),
+    }
+}
+
+#[cfg(test)]
+fn longest_visible_line_width(banner: &str) -> usize {
+    banner.lines().map(visible_line_width).max().unwrap_or_default()
+}
+
+#[cfg(test)]
+fn visible_line_width(line: &str) -> usize {
+    let bytes = line.as_bytes();
+    let mut width = 0;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'[') {
+            index += 2;
+            while index < bytes.len() && !bytes[index].is_ascii_alphabetic() {
+                index += 1;
+            }
+            if index < bytes.len() {
+                index += 1;
+            }
+            continue;
+        }
+
+        width += 1;
+        index += 1;
+    }
+
+    width
+}
+
+fn render_banner(top_rows: &[&str], bottom_rows: &[&str], pixel_width: usize) -> String {
+    let mut banner = String::from("\n");
+    banner.push_str(&render_block_rows(top_rows, 215, 172, pixel_width));
+    banner.push('\n');
+    banner.push_str(&render_block_rows(bottom_rows, 196, 160, pixel_width));
+    banner.push('\n');
+    banner.push_str("\x1b[38;5;220m  Terminal UI for Reddit -- Rust Rewrite\x1b[0m\n\n");
+    banner
+}
+
+fn render_block_rows(rows: &[&str], face_color: u8, shadow_color: u8, pixel_width: usize) -> String {
+    let mut rendered = String::new();
+    for row in rows {
+        rendered.push_str(&render_mask_row(row, face_color, pixel_width, 0));
+        rendered.push('\n');
+        rendered.push_str(&render_mask_row(row, shadow_color, pixel_width, 1));
+        rendered.push('\n');
+    }
+
+    rendered
+}
+
+fn render_mask_row(row: &str, color: u8, pixel_width: usize, indent_cells: usize) -> String {
+    let mut rendered = " ".repeat(indent_cells * pixel_width);
+
+    for cell in row.as_bytes() {
+        if *cell == b'#' {
+            rendered.push_str(&pixel_fill(color, pixel_width));
+        } else {
+            rendered.push_str(&" ".repeat(pixel_width));
+        }
+    }
+
+    rendered
+}
+
+fn pixel_fill(color: u8, pixel_width: usize) -> String {
+    format!("\x1b[38;5;{color}m{}\x1b[0m", "#".repeat(pixel_width))
+}
 
 /// Terminal UI for Reddit
 #[derive(Parser, Debug)]
@@ -74,8 +169,37 @@ enum Commands {
 impl Cli {
     fn print_banner(&self) {
         if !self.no_banner {
-            println!("{}", BANNER);
+            let width = terminal_size().ok().map(|(width, _)| width);
+            println!("{}", banner_for_width(width));
             println!();
+        }
+    }
+}
+
+struct TerminalRestoreGuard;
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        let _ = restore();
+    }
+}
+
+enum AppPage {
+    Subreddit(SubredditPage),
+    Submission(SubmissionPage),
+    Message(MessagePage),
+    Inbox(InboxPage),
+    Subscription(SubscriptionPage),
+}
+
+impl AppPage {
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> PageAction {
+        match self {
+            Self::Subreddit(page) => page.handle_key(key),
+            Self::Submission(page) => page.handle_key(key),
+            Self::Message(page) => page.handle_key(key),
+            Self::Inbox(page) => page.handle_key(key),
+            Self::Subscription(page) => page.handle_key(key),
         }
     }
 }
@@ -127,35 +251,142 @@ fn do_tui(subreddit: Option<&str>) -> Result<()> {
         println!("[TUI] Opening r/{}", sub);
     }
 
-    // Initialize terminal
-    let mut terminal = init()?;
-
-    // Create and load subreddit page
     let mut page = SubredditPage::new(subreddit.unwrap_or(""));
+    page.load_sync();
+    run_app(AppPage::Subreddit(page))?;
 
-    // Load data synchronously using blocking tokio runtime
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async {
-        page.load().await;
-    });
+    println!("[TUI] Exited TUI mode");
+    Ok(())
+}
 
-    // Event loop
+/// OAuth authentication flow
+fn do_auth(user: Option<&str>) -> Result<()> {
+    let config = Config::load()?;
+    println!("{}", auth_output(&config, user));
+    Ok(())
+}
+
+fn auth_output(config: &Config, user: Option<&str>) -> String {
+    let mut lines = vec!["[AUTH] Starting OAuth authentication...".to_string()];
+
+    if let Some(user) = user {
+        lines.push(format!("[AUTH] Username: {user}"));
+    }
+
+    let client_id = config.reddit.oauth_client_id.clone().unwrap_or_default();
+    if client_id.trim().is_empty() {
+        lines.push("[AUTH] OAuth is not configured.".to_string());
+        lines.push(format!(
+            "[AUTH] Add `oauth_client_id` to {}/tuir.cfg",
+            Config::config_dir().display()
+        ));
+        lines.push("[AUTH] Minimum config keys: oauth_client_id, oauth_redirect_uri, oauth_scope".to_string());
+        lines.push(format!(
+            "[AUTH] Token file will be stored at {}",
+            Config::token_file().display()
+        ));
+        return lines.join("\n");
+    }
+
+    let scopes = config
+        .reddit
+        .oauth_scope
+        .split(',')
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    let oauth = OAuth::new(
+        client_id,
+        config.reddit.oauth_redirect_uri.clone(),
+        scopes,
+    );
+
+    lines.push(format!(
+        "[AUTH] Redirect URI: {}",
+        config.reddit.oauth_redirect_uri
+    ));
+    lines.push(format!(
+        "[AUTH] Token file: {}",
+        Config::token_file().display()
+    ));
+    lines.push("[AUTH] Open the following URL in your browser:".to_string());
+    lines.push(String::new());
+    lines.push(format!("  {}", oauth.auth_url()));
+    lines.push(String::new());
+    lines.push("[AUTH] Token exchange is not implemented yet; this command currently validates config and prepares the browser step.".to_string());
+
+    lines.join("\n")
+}
+
+/// Open inbox
+fn do_inbox(subreddit: Option<&str>) -> Result<()> {
+    println!("[INBOX] Opening inbox...");
+    if let Some(sub) = subreddit {
+        println!("[INBOX] Ignoring subreddit filter for inbox: r/{}", sub);
+    }
+
+    let mut page = InboxPage::new();
+    page.load_sync();
+    run_app(AppPage::Inbox(page))?;
+    Ok(())
+}
+
+/// Open subscriptions
+fn do_subscriptions() -> Result<()> {
+    println!("[SUBS] Listing subscriptions...");
+
+    let mut page = SubscriptionPage::new();
+    page.load_sync();
+    run_app(AppPage::Subscription(page))?;
+    Ok(())
+}
+
+fn run_app(initial_page: AppPage) -> Result<()> {
+    let mut terminal = init()?;
+    let _restore_guard = TerminalRestoreGuard;
+
+    event_loop(&mut terminal, initial_page)
+}
+
+fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> {
+    let mut stack = vec![initial_page];
+
     loop {
-        // Draw
+        let Some(current_page) = stack.last_mut() else {
+            break;
+        };
+
         terminal.draw(|f| {
-            page.render(f);
+            match current_page {
+                AppPage::Subreddit(page) => page.render(f),
+                AppPage::Submission(page) => page.render(f),
+                AppPage::Message(page) => page.render(f),
+                AppPage::Inbox(page) => page.render(f),
+                AppPage::Subscription(page) => page.render(f),
+            }
         })?;
 
-        // Poll for input
         match event::poll(Duration::from_millis(100)) {
             Ok(true) => {
                 if let Ok(Event::Key(key)) = event::read() {
                     if key.kind == KeyEventKind::Press {
-                        let action = page.handle_key(key);
-                        if action == tuir_tui::pages::PageAction::Quit {
-                            break;
+                        let action = current_page.handle_key(key);
+                        match action {
+                            PageAction::Quit => break,
+                            PageAction::Back => {
+                                if stack.len() > 1 {
+                                    stack.pop();
+                                } else {
+                                    break;
+                                }
+                            }
+                            PageAction::Switch(kind) => {
+                                if let Some(next_page) = build_switched_page(current_page, kind) {
+                                    stack.push(next_page);
+                                }
+                            }
+                            PageAction::None => {}
                         }
                     }
                 }
@@ -165,43 +396,69 @@ fn do_tui(subreddit: Option<&str>) -> Result<()> {
         }
     }
 
-    // Restore terminal
-    restore()?;
-
-    println!("[TUI] Exited TUI mode");
     Ok(())
 }
 
-/// OAuth authentication flow
-fn do_auth(user: Option<&str>) -> Result<()> {
-    println!("[AUTH] Starting OAuth authentication...");
-    if let Some(u) = user {
-        println!("[AUTH] Username: {}", u);
+fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage> {
+    match (current_page, kind) {
+        (AppPage::Subreddit(page), PageKind::Submission) => {
+            let idx = page.list_state.selected()?;
+            let submission = page.submissions.get(idx)?.clone();
+            let mut next_page = SubmissionPage::new(submission);
+            next_page.load_sync();
+            Some(AppPage::Submission(next_page))
+        }
+        (AppPage::Subscription(page), PageKind::Subreddit) => {
+            let idx = page.list_state.selected()?;
+            let subreddit = page.subreddits.get(idx)?.display_name.clone();
+            let mut next_page = SubredditPage::new(&subreddit);
+            next_page.load_sync();
+            Some(AppPage::Subreddit(next_page))
+        }
+        (AppPage::Inbox(page), PageKind::Message) => {
+            let idx = page.list_state.selected()?;
+            let message = page.messages.get(idx)?.clone();
+            Some(AppPage::Message(MessagePage::new(message)))
+        }
+        (AppPage::Message(page), PageKind::Submission) => {
+            let submission_id = page
+                .message
+                .reply_to
+                .as_deref()
+                .and_then(|reply_to| reply_to.strip_prefix("t3_"))
+                .unwrap_or("mock_inbox");
+            let subreddit = page.message.subreddit.as_deref().unwrap_or("messages");
+            let submission = tuir_core::reddit::models::Submission {
+                id: submission_id.to_string(),
+                name: format!("t3_{submission_id}"),
+                title: page.message.subject.clone(),
+                author: page.message.author.clone(),
+                subreddit: subreddit.to_string(),
+                score: 0,
+                num_comments: 0,
+                permalink: format!("/r/{subreddit}/comments/{submission_id}/inbox"),
+                url: format!("https://reddit.com/r/{subreddit}/comments/{submission_id}/"),
+                selftext: page.message.body.clone(),
+                created_utc: page.message.created_utc,
+                distinguished: None,
+                edited: tuir_core::reddit::models::EditedField::Bool(false),
+                link_flair_text: None,
+                author_flair_text: page.message.author_flair_text.clone(),
+                over_18: false,
+                pinned: false,
+                spoiler: false,
+                stickied: false,
+                saved: false,
+                hidden: false,
+                likes: None,
+                url_full: None,
+            };
+            let mut next_page = SubmissionPage::new(submission);
+            next_page.load_sync();
+            Some(AppPage::Submission(next_page))
+        }
+        _ => None,
     }
-    println!("[AUTH] Open the following URL in your browser:");
-    println!();
-    println!("  https://www.reddit.com/api/v1/authorize?...");
-    println!();
-    println!("[AUTH] Then paste the authorization code here.");
-    println!("[AUTH] (This feature is stub - see M2 for implementation)");
-    Ok(())
-}
-
-/// Open inbox
-fn do_inbox(subreddit: Option<&str>) -> Result<()> {
-    println!("[INBOX] Opening inbox...");
-    if let Some(sub) = subreddit {
-        println!("[INBOX] Opening r/{} inbox", sub);
-    }
-    println!("[INBOX] Inbox not yet implemented");
-    Ok(())
-}
-
-/// Open subscriptions
-fn do_subscriptions() -> Result<()> {
-    println!("[SUBS] Listing subscriptions...");
-    println!("[SUBS] Subscriptions not yet implemented");
-    Ok(())
 }
 
 /// List available themes
@@ -216,4 +473,144 @@ fn do_list_themes() -> Result<()> {
     println!();
     println!("  Use --theme=<name> to select a theme");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        auth_output, banner_for_width, build_switched_page, longest_visible_line_width,
+        render_banner, AppPage, COMPACT_BOTTOM_ROWS, COMPACT_PIXEL_WIDTH, COMPACT_TOP_ROWS,
+        HERO_BOTTOM_ROWS, HERO_PIXEL_WIDTH, HERO_TOP_ROWS, MIN_3D_WIDTH,
+    };
+    use tuir_core::{config::Config, reddit::models::Message};
+    use tuir_tui::pages::{inbox::InboxPage, message::MessagePage, PageKind};
+
+    fn hero_banner() -> String {
+        render_banner(&HERO_TOP_ROWS, &HERO_BOTTOM_ROWS, HERO_PIXEL_WIDTH)
+    }
+
+    fn compact_banner() -> String {
+        render_banner(&COMPACT_TOP_ROWS, &COMPACT_BOTTOM_ROWS, COMPACT_PIXEL_WIDTH)
+    }
+
+    #[test]
+    fn defaults_to_compact_banner_when_width_is_unknown() {
+        assert_eq!(banner_for_width(None), compact_banner());
+    }
+
+    #[test]
+    fn uses_compact_banner_below_threshold() {
+        assert_eq!(banner_for_width(Some(MIN_3D_WIDTH - 1)), compact_banner());
+    }
+
+    #[test]
+    fn uses_3d_banner_at_threshold_and_above() {
+        assert_eq!(banner_for_width(Some(MIN_3D_WIDTH)), hero_banner());
+        assert_eq!(banner_for_width(Some(MIN_3D_WIDTH + 20)), hero_banner());
+    }
+
+    #[test]
+    fn hero_banner_contains_branding_and_palette() {
+        let banner = hero_banner();
+        assert!(banner.contains("Terminal UI for Reddit -- Rust Rewrite"));
+        assert!(banner.contains("\x1b[38;5;215m##\x1b[0m"));
+        assert!(banner.contains("\x1b[38;5;196m##\x1b[0m"));
+    }
+
+    #[test]
+    fn hero_banner_uses_visible_foreground_blocks() {
+        let banner = hero_banner();
+        assert!(!banner.contains("\x1b[48;5;"));
+        assert!(banner.contains("##"));
+    }
+
+    #[test]
+    fn banner_variants_stay_within_expected_width_budgets() {
+        let hero_banner = hero_banner();
+        let compact_banner = compact_banner();
+        assert!(longest_visible_line_width(&hero_banner) >= 68);
+        assert!(longest_visible_line_width(&hero_banner) <= 80);
+        assert!(longest_visible_line_width(&compact_banner) <= 60);
+    }
+
+    #[test]
+    fn hero_threshold_covers_rendered_width() {
+        let hero_banner = hero_banner();
+        assert!(usize::from(MIN_3D_WIDTH) >= longest_visible_line_width(&hero_banner));
+    }
+
+    #[test]
+    fn auth_output_guides_when_client_id_is_missing() {
+        let config = Config::default();
+
+        let output = auth_output(&config, None);
+
+        assert!(output.contains("OAuth is not configured"));
+        assert!(output.contains("oauth_client_id"));
+        assert!(output.contains("tuir.cfg"));
+    }
+
+    #[test]
+    fn auth_output_prints_real_url_when_configured() {
+        let mut config = Config::default();
+        config.reddit.oauth_client_id = Some("client123".to_string());
+        config.reddit.oauth_redirect_uri = "http://127.0.0.1:65000/".to_string();
+        config.reddit.oauth_redirect_port = 65000;
+        config.reddit.oauth_scope = "read,vote".to_string();
+
+        let output = auth_output(&config, Some("demo-user"));
+
+        assert!(output.contains("Username: demo-user"));
+        assert!(output.contains("client123"));
+        assert!(output.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A65000%2F"));
+        assert!(output.contains("scope=read%2Cvote"));
+    }
+
+    #[test]
+    fn inbox_switch_builds_message_page() {
+        let mut inbox = InboxPage::new();
+        inbox.messages = vec![Message {
+            id: "mock_msg_1".to_string(),
+            name: "t4_mock_msg_1".to_string(),
+            subject: "Inbox subject".to_string(),
+            author: "reddit".to_string(),
+            body: "Hello".to_string(),
+            body_html: None,
+            created_utc: 1_700_000_000.0,
+            dest: "mock_user".to_string(),
+            new: true,
+            reply_to: Some("t3_rust_1".to_string()),
+            subreddit: Some("rust".to_string()),
+            author_flair_text: None,
+            was_comment: true,
+        }];
+        inbox.list_state.select(Some(0));
+
+        let next_page = build_switched_page(&AppPage::Inbox(inbox), PageKind::Message);
+
+        assert!(matches!(next_page, Some(AppPage::Message(_))));
+    }
+
+    #[test]
+    fn message_switch_builds_submission_page() {
+        let message = Message {
+            id: "mock_msg_1".to_string(),
+            name: "t4_mock_msg_1".to_string(),
+            subject: "Inbox subject".to_string(),
+            author: "reddit".to_string(),
+            body: "Hello".to_string(),
+            body_html: None,
+            created_utc: 1_700_000_000.0,
+            dest: "mock_user".to_string(),
+            new: true,
+            reply_to: Some("t3_rust_1".to_string()),
+            subreddit: Some("rust".to_string()),
+            author_flair_text: None,
+            was_comment: true,
+        };
+
+        let next_page = build_switched_page(&AppPage::Message(MessagePage::new(message)), PageKind::Submission);
+
+        assert!(matches!(next_page, Some(AppPage::Submission(_))));
+    }
 }

@@ -58,13 +58,25 @@ impl SubredditPage {
 
         let listing = self.client.hot(sub, 50).await;
         self.submissions = listing.data.children.into_iter().map(|c| c.data).collect();
-        self.vote_states = vec![VoteState::None; self.submissions.len()];
+        self.vote_states = self
+            .submissions
+            .iter()
+            .map(|submission| match submission.likes.map(i8::from).unwrap_or(0) {
+                1 => VoteState::Up,
+                -1 => VoteState::Down,
+                _ => VoteState::None,
+            })
+            .collect();
 
         if !self.submissions.is_empty() {
             self.list_state.select(Some(0));
         }
 
         self.loading = false;
+    }
+
+    pub fn load_sync(&mut self) {
+        crate::pages::block_on(self.load());
     }
 
     /// Move cursor up
@@ -124,7 +136,7 @@ impl SubredditPage {
                 // Send to client
                 let client = Arc::clone(&self.client);
                 let name = sub.name.clone();
-                tokio::spawn(async move {
+                crate::pages::block_on(async move {
                     client.vote(&name, direction).await;
                 });
             }
@@ -133,14 +145,7 @@ impl SubredditPage {
 
     /// Refresh listing
     pub fn refresh(&mut self) {
-        let sub = self.name.clone();
-        let sort = self.sort;
-
-        tokio::spawn(async move {
-            let mut page = SubredditPage::new(&sub);
-            page.sort = sort;
-            page.load().await;
-        });
+        self.load_sync();
     }
 }
 
@@ -211,6 +216,7 @@ impl crate::pages::Page for SubredditPage {
                 KeyAction::Refresh => {
                     self.refresh();
                 }
+                KeyAction::Open => return PageAction::Switch(crate::pages::PageKind::Submission),
                 KeyAction::NextItem => self.move_down(),
                 KeyAction::PrevItem => self.move_up(),
                 KeyAction::Top => self.move_to_top(),
@@ -226,5 +232,44 @@ impl crate::pages::Page for SubredditPage {
 
     fn title(&self) -> &str {
         self.subreddit_display()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::pages::{Page, PageAction, PageKind};
+
+    #[test]
+    fn refresh_reloads_current_page_state() {
+        let mut page = SubredditPage::new("rust");
+        assert!(page.submissions.is_empty());
+
+        page.refresh();
+
+        assert!(!page.submissions.is_empty());
+        assert_eq!(page.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn refresh_preserves_mock_vote_state() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+
+        page.vote(1);
+        page.refresh();
+
+        assert_eq!(page.vote_states.first(), Some(&VoteState::Up));
+    }
+
+    #[test]
+    fn open_returns_submission_switch() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+
+        let action = page.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(action, PageAction::Switch(PageKind::Submission));
     }
 }

@@ -47,6 +47,53 @@ impl InboxPage {
         self.loading = false;
     }
 
+    pub fn load_sync(&mut self) {
+        crate::pages::block_on(self.load());
+    }
+
+    pub fn refresh(&mut self) {
+        self.load_sync();
+    }
+
+    fn open_selected_message(&mut self) -> PageAction {
+        let Some(idx) = self.list_state.selected() else {
+            return PageAction::None;
+        };
+        let Some(message) = self.messages.get_mut(idx) else {
+            return PageAction::None;
+        };
+
+        message.new = false;
+        let name = message.name.clone();
+        let client = Arc::clone(&self.client);
+        crate::pages::block_on(async move {
+            client.mark_read(&name).await;
+        });
+
+        PageAction::Switch(crate::pages::PageKind::Message)
+    }
+
+    fn toggle_selected_read_state(&mut self) {
+        let Some(idx) = self.list_state.selected() else {
+            return;
+        };
+        let Some(message) = self.messages.get_mut(idx) else {
+            return;
+        };
+
+        message.new = !message.new;
+        let name = message.name.clone();
+        let mark_unread = message.new;
+        let client = Arc::clone(&self.client);
+        crate::pages::block_on(async move {
+            if mark_unread {
+                client.mark_unread(&name).await;
+            } else {
+                client.mark_read(&name).await;
+            }
+        });
+    }
+
     /// Move cursor up
     pub fn move_up(&mut self) {
         if let Some(idx) = self.list_state.selected() {
@@ -215,7 +262,7 @@ impl crate::pages::Page for InboxPage {
         }
 
         // ── Footer ───────────────────────────────────────────────
-        let footer_text = " j/k:Navigate | Enter:Open | q:Back | r:Refresh ";
+        let footer_text = " j/k:Navigate | Enter:Open | u:Toggle unread | q:Back | r:Refresh ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)
@@ -232,16 +279,17 @@ impl crate::pages::Page for InboxPage {
             return PageAction::None;
         }
 
+        if key.code == crossterm::event::KeyCode::Char('u') {
+            self.toggle_selected_read_state();
+            return PageAction::None;
+        }
+
         if let Some(action) = KeyAction::from_key(key.code, key.modifiers) {
             match action {
                 KeyAction::Quit => return PageAction::Quit,
                 KeyAction::Back => return PageAction::Back,
-                KeyAction::Refresh => {
-                    let client = Arc::clone(&self.client);
-                    tokio::spawn(async move {
-                        client.inbox().await;
-                    });
-                }
+                KeyAction::Refresh => self.refresh(),
+                KeyAction::Open => return self.open_selected_message(),
                 KeyAction::NextItem => self.move_down(),
                 KeyAction::PrevItem => self.move_up(),
                 KeyAction::Top => self.move_to_top(),
@@ -255,5 +303,66 @@ impl crate::pages::Page for InboxPage {
 
     fn title(&self) -> &str {
         "inbox"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pages::{Page, PageAction, PageKind};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tuir_core::reddit::models::Message;
+
+    fn sample_message() -> Message {
+        Message {
+            id: "mock_msg_1".to_string(),
+            name: "t4_mock_msg_1".to_string(),
+            subject: "Inbox subject".to_string(),
+            author: "reddit".to_string(),
+            body: "Hello".to_string(),
+            body_html: None,
+            created_utc: 1_700_000_000.0,
+            dest: "mock_user".to_string(),
+            new: true,
+            reply_to: Some("t3_rust_1".to_string()),
+            subreddit: Some("rust".to_string()),
+            author_flair_text: None,
+            was_comment: true,
+        }
+    }
+
+    #[test]
+    fn open_returns_submission_switch() {
+        let mut page = InboxPage::new();
+        page.messages = vec![sample_message()];
+        page.list_state.select(Some(0));
+
+        let action = page.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(action, PageAction::Switch(PageKind::Message));
+    }
+
+    #[test]
+    fn open_marks_message_as_read() {
+        let mut page = InboxPage::new();
+        page.messages = vec![sample_message()];
+        page.list_state.select(Some(0));
+
+        let _ = page.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert!(!page.messages[0].new);
+    }
+
+    #[test]
+    fn toggle_unread_marks_message_unread() {
+        let mut page = InboxPage::new();
+        let mut message = sample_message();
+        message.new = false;
+        page.messages = vec![message];
+        page.list_state.select(Some(0));
+
+        let _ = page.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::empty()));
+
+        assert!(page.messages[0].new);
     }
 }

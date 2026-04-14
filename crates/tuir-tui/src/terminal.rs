@@ -12,14 +12,28 @@ pub fn init() -> anyhow::Result<TerminalType> {
     crossterm::terminal::enable_raw_mode()?;
 
     let mut stderr = io::stderr();
-    crossterm::execute!(
+    if let Err(err) = crossterm::execute!(
         stderr,
         crossterm::terminal::EnterAlternateScreen,
         crossterm::cursor::Hide,
-    )?;
+    ) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        return Err(err.into());
+    }
 
     let backend = CrosstermBackend::new(stderr);
-    let terminal = Terminal::new(backend)?;
+    let terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            let _ = crossterm::execute!(
+                io::stderr(),
+                crossterm::cursor::Show,
+                crossterm::terminal::LeaveAlternateScreen,
+            );
+            let _ = crossterm::terminal::disable_raw_mode();
+            return Err(err.into());
+        }
+    };
 
     Ok(terminal)
 }
