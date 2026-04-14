@@ -177,6 +177,21 @@ impl AppPage {
         matches!(self, Self::Help(_))
     }
 
+    /// Per-iteration time-based update hook. Only pages that drive
+    /// animations (MediaPage) do real work here; the rest rely on the
+    /// default no-op from the Page trait.
+    fn tick(&mut self) {
+        match self {
+            Self::Subreddit(page) => page.tick(),
+            Self::Submission(page) => page.tick(),
+            Self::Message(page) => page.tick(),
+            Self::Inbox(page) => page.tick(),
+            Self::Subscription(page) => page.tick(),
+            Self::Help(page) => page.tick(),
+            Self::Media(page) => page.tick(),
+        }
+    }
+
     /// Borrow the active page's theme so children inherit it on switch.
     fn theme(&self) -> Arc<AppTheme> {
         match self {
@@ -556,6 +571,10 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
         let Some(current_page) = stack.last_mut() else {
             break;
         };
+
+        // Drive time-based page updates (e.g. GIF frame advancement)
+        // before each redraw. Non-animated pages no-op.
+        current_page.tick();
 
         terminal.draw(|f| {
             match current_page {

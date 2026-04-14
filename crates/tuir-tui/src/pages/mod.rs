@@ -51,6 +51,11 @@ pub trait Page {
 
     /// Title shown in the status bar
     fn title(&self) -> &str;
+
+    /// Time-based update hook called once per event-loop iteration,
+    /// regardless of whether a key event fired. Default is a no-op;
+    /// pages that drive animations or background work override this.
+    fn tick(&mut self) {}
 }
 
 pub fn block_on<F>(future: F) -> F::Output
