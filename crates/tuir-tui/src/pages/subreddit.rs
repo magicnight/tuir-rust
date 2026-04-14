@@ -24,6 +24,8 @@ pub struct SubredditPage {
     pub loading: bool,
     pub client: Arc<dyn RedditApi>,
     pub theme: Arc<AppTheme>,
+    /// Live `/` prompt buffer; `Some` while the user is typing a target name.
+    pub goto_input: Option<String>,
 }
 
 impl SubredditPage {
@@ -41,6 +43,7 @@ impl SubredditPage {
             loading: false,
             client,
             theme: Arc::new(AppTheme::default()),
+            goto_input: None,
         }
     }
 
@@ -179,6 +182,44 @@ impl SubredditPage {
         self.sort = sort;
         self.load_sync();
     }
+
+    /// Jump to a different subreddit, replacing the current listing.
+    ///
+    /// `target` may include or omit the `r/` prefix; both `rust` and
+    /// `r/rust` resolve to the same listing. An empty string is treated as
+    /// the front page.
+    pub fn navigate_to(&mut self, target: &str) {
+        let trimmed = target
+            .trim()
+            .trim_start_matches("r/")
+            .trim_start_matches("/r/")
+            .trim_matches('/');
+        self.name = trimmed.to_string();
+        self.list_state.select(None);
+        self.load_sync();
+    }
+
+    /// Open the inline `/`-prompt input buffer.
+    pub fn begin_goto(&mut self) {
+        self.goto_input = Some(String::new());
+    }
+
+    /// Cancel an in-progress `/`-prompt without navigating.
+    pub fn cancel_goto(&mut self) {
+        self.goto_input = None;
+    }
+
+    /// Commit the current `/`-prompt buffer: when non-empty, navigate to
+    /// the typed subreddit and clear the prompt.
+    pub fn submit_goto(&mut self) {
+        let Some(buffer) = self.goto_input.take() else {
+            return;
+        };
+        if buffer.trim().is_empty() {
+            return;
+        }
+        self.navigate_to(&buffer);
+    }
 }
 
 impl crate::pages::Page for SubredditPage {
@@ -229,11 +270,16 @@ impl crate::pages::Page for SubredditPage {
             &self.theme,
         );
 
-        // Footer
-        let footer_text =
-            " j/k:Nav | Enter:Open | a/z:Vote | 1-5:Sort | r:Refresh | ?:Help | q:Quit ";
+        // Footer — when the goto prompt is active, take the footer over
+        // for the input line so the user has a single visual focus.
+        let footer_title = if let Some(buffer) = &self.goto_input {
+            format!(" Go to: r/{}_  (Enter to open · Esc to cancel) ", buffer)
+        } else {
+            " j/k:Nav | Enter:Open | /:Goto | a/z:Vote | 1-5:Sort | r:Refresh | ?:Help | q:Quit "
+                .to_string()
+        };
         let footer = Block::default()
-            .title(footer_text)
+            .title(footer_title)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .style(self.theme.footer);
@@ -243,6 +289,31 @@ impl crate::pages::Page for SubredditPage {
 
     fn handle_key(&mut self, key: KeyEvent) -> PageAction {
         use crate::pages::PageAction;
+
+        // ── /-prompt input mode ─────────────────────────────────
+        // While the goto buffer is open we capture every printable char
+        // into it, Backspace deletes one char, Enter commits, Esc cancels.
+        // No other shortcuts (sort, vote, open) apply in this mode so the
+        // user can type subreddit names containing digits without flipping
+        // the sort order.
+        if self.goto_input.is_some() {
+            match key.code {
+                KeyCode::Esc => self.cancel_goto(),
+                KeyCode::Enter => self.submit_goto(),
+                KeyCode::Backspace => {
+                    if let Some(buf) = self.goto_input.as_mut() {
+                        buf.pop();
+                    }
+                }
+                KeyCode::Char(ch) => {
+                    if let Some(buf) = self.goto_input.as_mut() {
+                        buf.push(ch);
+                    }
+                }
+                _ => {}
+            }
+            return PageAction::None;
+        }
 
         // Digit shortcuts cycle the sort order (mirrors classic tuir/rtv).
         if let KeyCode::Char(ch) = key.code {
@@ -272,6 +343,7 @@ impl crate::pages::Page for SubredditPage {
                 KeyAction::Bottom => self.move_to_bottom(),
                 KeyAction::VoteUp => self.vote(1),
                 KeyAction::VoteDown => self.vote(-1),
+                KeyAction::GoTo => self.begin_goto(),
                 _ => {}
             }
         }
@@ -365,6 +437,85 @@ mod tests {
         page.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()));
         assert_eq!(page.sort, SortOrder::Hot);
         assert_eq!(page.submissions.len(), before);
+    }
+
+    #[test]
+    fn slash_opens_goto_prompt_and_buffers_chars() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        page.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        assert!(page.goto_input.is_some());
+
+        for ch in "golang".chars() {
+            page.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()));
+        }
+        assert_eq!(page.goto_input.as_deref(), Some("golang"));
+    }
+
+    #[test]
+    fn enter_in_goto_prompt_navigates_and_clears_buffer() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        page.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        for ch in "golang".chars() {
+            page.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()));
+        }
+        page.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert!(page.goto_input.is_none());
+        assert_eq!(page.name, "golang");
+        // Mock client should have re-stamped the title prefix with [hot].
+        assert!(page
+            .submissions
+            .first()
+            .map(|s| s.title.starts_with("[hot]"))
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn esc_in_goto_prompt_cancels_without_navigating() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        page.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        page.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
+        page.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+
+        assert!(page.goto_input.is_none());
+        assert_eq!(page.name, "rust");
+    }
+
+    #[test]
+    fn backspace_in_goto_prompt_pops_last_char() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        page.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        for ch in "abc".chars() {
+            page.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()));
+        }
+        page.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(page.goto_input.as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn navigate_to_strips_r_slash_prefix() {
+        let mut page = SubredditPage::new("rust");
+        page.navigate_to("r/golang");
+        assert_eq!(page.name, "golang");
+        page.navigate_to("/r/python");
+        assert_eq!(page.name, "python");
+        page.navigate_to("plain");
+        assert_eq!(page.name, "plain");
+    }
+
+    #[test]
+    fn digit_keys_in_goto_prompt_do_not_change_sort() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        page.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        page.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::empty()));
+        // 2 should land in the prompt buffer, not flip sort to New.
+        assert_eq!(page.sort, SortOrder::Hot);
+        assert_eq!(page.goto_input.as_deref(), Some("2"));
     }
 
     #[test]
