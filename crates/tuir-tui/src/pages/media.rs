@@ -28,7 +28,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
-use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::StatefulImage;
 use std::path::PathBuf;
@@ -41,8 +41,10 @@ pub enum MediaStatus {
     /// page is in [`MediaStyle::Off`] mode and intentionally never loads.
     Idle,
     /// The download/decode pipeline succeeded; we hold a stateful
-    /// protocol the renderer feeds frames to on every draw.
-    Ready(StatefulProtocol),
+    /// protocol the renderer feeds frames to on every draw. Boxed so
+    /// the enum variants stay close in size — `StatefulProtocol` is
+    /// noticeably larger than the other variants on ratatui-image v10.
+    Ready(Box<StatefulProtocol>),
     /// Some stage of the pipeline failed; show the message to the user.
     Failed(String),
     /// The classified MediaRef is not something we render inline (video,
@@ -133,21 +135,20 @@ impl MediaPage {
             }
         };
 
-        let mut picker = match Picker::from_query_stdio() {
-            Ok(p) => p,
-            Err(_) => {
-                // Headless / non-tty fallback: pick a reasonable font cell
-                // size so at least the half-blocks renderer has something
-                // to compute against.
-                Picker::from_fontsize((8, 16))
-            }
+        // Picker selection:
+        //   Retro  → always use the explicit halfblocks constructor so
+        //            even kitty/iTerm2/sixel terminals get the
+        //            deliberate browsh aesthetic.
+        //   Auto   → query the terminal for its best protocol; fall
+        //            back to halfblocks on headless / non-tty.
+        let picker = if matches!(self.style, MediaStyle::Retro) {
+            Picker::halfblocks()
+        } else {
+            Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
         };
-        if matches!(self.style, MediaStyle::Retro) {
-            picker.set_protocol_type(ProtocolType::Halfblocks);
-        }
 
         let protocol = picker.new_resize_protocol(dyn_image);
-        self.status = MediaStatus::Ready(protocol);
+        self.status = MediaStatus::Ready(Box::new(protocol));
     }
 
     fn kind_label(kind: MediaKind) -> &'static str {
@@ -202,7 +203,7 @@ impl Page for MediaPage {
         match &mut self.status {
             MediaStatus::Ready(protocol) => {
                 let widget = StatefulImage::default();
-                frame.render_stateful_widget(widget, inner, protocol);
+                frame.render_stateful_widget(widget, inner, protocol.as_mut());
             }
             MediaStatus::Idle => {
                 let lines = vec![
