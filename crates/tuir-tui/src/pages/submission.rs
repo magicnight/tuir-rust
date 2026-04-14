@@ -12,6 +12,7 @@ use ratatui::{
     Frame,
 };
 use std::sync::Arc;
+use tuir_core::content::render_plain_string;
 use tuir_core::reddit::models::{Comment, CommentReplies, Submission};
 use tuir_core::reddit::{MockRedditClient, RedditApi};
 
@@ -25,28 +26,59 @@ pub struct CommentNode {
 }
 
 impl CommentNode {
-    /// Create from a comment, computing reply count
     fn from_comment(comment: Comment) -> Self {
-        let reply_count = Self::count_replies(&comment.replies);
         Self {
             comment,
             collapsed: false,
             visible: true,
-            reply_count,
+            reply_count: 0,
         }
-    }
-
-    fn count_replies(replies: &Option<Box<CommentReplies>>) -> usize {
-        replies.as_ref().map_or(0, |b| match &**b {
-            CommentReplies::Listing(listing) => listing.data.children.len(),
-            CommentReplies::Empty => 0,
-        })
     }
 
     /// Check if this is a "load more" type comment
     pub fn is_more(&self) -> bool {
         self.comment.body.is_empty() || self.comment.id.starts_with("more_")
     }
+}
+
+/// Depth-first flatten of a Reddit comment tree into a pre-order list.
+///
+/// Reddit returns comments as a nested tree (each comment may carry a
+/// `replies` listing). The view layer wants a flat index sequence with
+/// depth information so it can indent and skip collapsed subtrees. This
+/// helper walks the tree once, consumes children into top-level nodes,
+/// fills in `depth` when the API omitted it, and records each node's
+/// direct-reply count before the children are moved out.
+pub fn flatten_tree(comments: Vec<Comment>, depth: i64) -> Vec<CommentNode> {
+    let mut out = Vec::new();
+    for mut comment in comments {
+        let replies = comment.replies.take();
+        if comment.depth.is_none() {
+            comment.depth = Some(depth);
+        }
+
+        let (direct_count, child_comments) = match replies {
+            Some(boxed) => match *boxed {
+                CommentReplies::Listing(listing) => {
+                    let children: Vec<Comment> = listing
+                        .data
+                        .children
+                        .into_iter()
+                        .map(|thing| thing.data)
+                        .collect();
+                    (children.len(), children)
+                }
+                CommentReplies::Empty => (0, Vec::new()),
+            },
+            None => (0, Vec::new()),
+        };
+
+        let mut node = CommentNode::from_comment(comment);
+        node.reply_count = direct_count;
+        out.push(node);
+        out.extend(flatten_tree(child_comments, depth + 1));
+    }
+    out
 }
 
 /// Submission page state
@@ -96,11 +128,7 @@ impl SubmissionPage {
             -1 => VoteState::Down,
             _ => VoteState::None,
         };
-        self.comments = resp
-            .comments
-            .into_iter()
-            .map(CommentNode::from_comment)
-            .collect();
+        self.comments = flatten_tree(resp.comments, 0);
 
         self.rebuild_flattened();
 
@@ -119,40 +147,29 @@ impl SubmissionPage {
         self.load_sync();
     }
 
-    /// Rebuild the flattened view based on collapsed state
+    /// Rebuild the visible-comment index list from `self.comments`, honoring
+    /// per-node `collapsed` state.
+    ///
+    /// Because [`flatten_tree`] produces a depth-first pre-order list,
+    /// every descendant of a collapsed comment sits at a strictly greater
+    /// `depth` and is adjacent in the vector — so a single linear pass with
+    /// a "hide below depth N" threshold is enough.
     fn rebuild_flattened(&mut self) {
         self.flattened.clear();
+        let mut hidden_below: Option<i64> = None;
 
-        fn walk(nodes: &[CommentNode], flattened: &mut Vec<usize>) {
-            for (i, node) in nodes.iter().enumerate() {
-                flattened.push(i);
-
-                // Process replies if not collapsed
-                if !node.collapsed {
-                    if let Some(ref replies_box) = node.comment.replies {
-                        match &**replies_box {
-                            CommentReplies::Listing(listing) => {
-                                for child in &listing.data.children {
-                                    // Recursively walk children
-                                    walk_child(&child.data, flattened, 1);
-                                }
-                            }
-                            CommentReplies::Empty => {}
-                        }
-                    }
+        for (idx, node) in self.comments.iter().enumerate() {
+            let depth = node.comment.depth.unwrap_or(0);
+            if let Some(threshold) = hidden_below {
+                if depth > threshold {
+                    continue;
                 }
+                hidden_below = None;
             }
-        }
-
-        fn walk_child(_comment: &Comment, flattened: &mut Vec<usize>, _depth: usize) {
-            flattened.push(flattened.len()); // placeholder - actual impl would need indices
-        }
-
-        walk(&self.comments, &mut self.flattened);
-
-        // Fallback: if flatten failed, just show all
-        if self.flattened.is_empty() {
-            self.flattened = (0..self.comments.len()).collect();
+            self.flattened.push(idx);
+            if node.collapsed {
+                hidden_below = Some(depth);
+            }
         }
     }
 
@@ -456,7 +473,27 @@ impl SubmissionPage {
         } else if node.is_more() {
             "[+] Load more comments".to_string()
         } else {
-            node.comment.body.chars().take(100).collect::<String>()
+            // Prefer the server-rendered HTML body; render_plain_string keeps
+            // links, code fences, and list markers while staying printable.
+            // Falls back to the raw markdown body when HTML is absent.
+            let rendered = node
+                .comment
+                .body_html
+                .as_deref()
+                .map(render_plain_string)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| node.comment.body.clone());
+            // Collapse to a single line for list preview; full body is shown
+            // when we eventually add an expanded-comment mode.
+            rendered
+                .split('\n')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ")
+                .chars()
+                .take(160)
+                .collect::<String>()
         };
 
         let depth_color = match depth % 4 {
@@ -569,5 +606,121 @@ mod tests {
 
         assert_eq!(page.vote_state, VoteState::Up);
         assert_eq!(page.submission.likes.map(i8::from), Some(1));
+    }
+
+    fn make_comment(id: &str, depth: Option<i64>, replies: Vec<Comment>) -> Comment {
+        use tuir_core::reddit::models::{
+            CommentReplies, EditedField, Listing, ListingData, Thing,
+        };
+        let reply_box = if replies.is_empty() {
+            Some(Box::new(CommentReplies::Empty))
+        } else {
+            let children: Vec<Thing<Comment>> = replies
+                .into_iter()
+                .map(|c| Thing {
+                    kind: "t1".to_string(),
+                    data: c,
+                })
+                .collect();
+            let listing = Listing {
+                kind: "Listing".to_string(),
+                data: ListingData {
+                    modhash: None,
+                    dist: None,
+                    children,
+                    after: None,
+                    before: None,
+                },
+            };
+            Some(Box::new(CommentReplies::Listing(listing)))
+        };
+        Comment {
+            id: id.to_string(),
+            name: format!("t1_{id}"),
+            author: "tester".to_string(),
+            body: format!("body of {id}"),
+            body_html: None,
+            link_id: "t3_abc".to_string(),
+            parent_id: "t3_abc".to_string(),
+            score: 0,
+            created_utc: 0.0,
+            distinguished: None,
+            edited: EditedField::Bool(false),
+            depth,
+            replies: reply_box,
+            is_submitter: false,
+            saved: false,
+            likes: None,
+            author_flair_text: None,
+        }
+    }
+
+    #[test]
+    fn flatten_tree_preorder_walks_nested_replies() {
+        let tree = vec![
+            make_comment(
+                "a",
+                Some(0),
+                vec![
+                    make_comment("a1", Some(1), vec![make_comment("a1a", Some(2), vec![])]),
+                    make_comment("a2", Some(1), vec![]),
+                ],
+            ),
+            make_comment("b", Some(0), vec![]),
+        ];
+        let flat = super::flatten_tree(tree, 0);
+        let ids: Vec<&str> = flat.iter().map(|n| n.comment.id.as_str()).collect();
+        assert_eq!(ids, ["a", "a1", "a1a", "a2", "b"]);
+    }
+
+    #[test]
+    fn flatten_tree_fills_missing_depth() {
+        let tree = vec![make_comment(
+            "root",
+            None,
+            vec![make_comment("child", None, vec![])],
+        )];
+        let flat = super::flatten_tree(tree, 0);
+        assert_eq!(flat[0].comment.depth, Some(0));
+        assert_eq!(flat[1].comment.depth, Some(1));
+    }
+
+    #[test]
+    fn flatten_tree_records_direct_reply_counts() {
+        let tree = vec![make_comment(
+            "root",
+            Some(0),
+            vec![
+                make_comment("c1", Some(1), vec![]),
+                make_comment("c2", Some(1), vec![]),
+            ],
+        )];
+        let flat = super::flatten_tree(tree, 0);
+        assert_eq!(flat[0].reply_count, 2);
+        assert_eq!(flat[1].reply_count, 0);
+    }
+
+    #[test]
+    fn rebuild_flattened_skips_collapsed_subtree() {
+        let mut page = SubmissionPage::new(sample_submission(0));
+        page.comments = super::flatten_tree(
+            vec![
+                make_comment(
+                    "a",
+                    Some(0),
+                    vec![make_comment("a1", Some(1), vec![])],
+                ),
+                make_comment("b", Some(0), vec![]),
+            ],
+            0,
+        );
+        page.comments[0].collapsed = true;
+        page.rebuild_flattened();
+        let ids: Vec<&str> = page
+            .flattened
+            .iter()
+            .map(|&idx| page.comments[idx].comment.id.as_str())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
     }
 }
