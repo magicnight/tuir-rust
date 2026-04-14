@@ -198,13 +198,13 @@ impl crate::pages::Page for SubredditPage {
         // Header
         let header_text = if self.loading {
             format!(
-                " r/{} | {} | Loading... ",
+                " ▎ r/{} • {} • Loading... ",
                 self.subreddit_display(),
                 self.sort.label().to_uppercase()
             )
         } else {
             format!(
-                " r/{} | {} | {} posts ",
+                " ▎ r/{} • {} • {} posts ",
                 self.subreddit_display(),
                 self.sort.label().to_uppercase(),
                 self.submissions.len()

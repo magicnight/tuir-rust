@@ -300,7 +300,7 @@ impl crate::pages::Page for SubmissionPage {
 
         // ── Header ──────────────────────────────────────────────
         let header_text = format!(
-            " r/{} • {} • by {} • {} ",
+            " ▎ r/{} • {} • by {} • {} ",
             self.submission.subreddit,
             self.format_vote_display(),
             self.submission.author,

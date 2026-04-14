@@ -116,7 +116,7 @@ impl Page for HelpPage {
             .split(area);
 
         let header = Block::default()
-            .title(" HELP ")
+            .title(" ▎ HELP ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .style(self.theme.header);

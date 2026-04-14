@@ -67,7 +67,7 @@ impl crate::pages::Page for MessagePage {
 
         let header = Block::default()
             .title(format!(
-                " MESSAGE • from {} • {} ",
+                " ▎ MESSAGE • from {} • {} ",
                 self.message.author,
                 Self::format_timestamp(self.message.created_utc)
             ))

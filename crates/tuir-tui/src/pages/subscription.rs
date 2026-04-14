@@ -183,7 +183,7 @@ impl crate::pages::Page for SubscriptionPage {
             .count();
 
         let header_text = format!(
-            " SUBSCRIPTIONS • {} total • {} subscribed ",
+            " ▎ SUBSCRIPTIONS • {} total • {} subscribed ",
             self.subreddits.len(),
             subscribed_count
         );

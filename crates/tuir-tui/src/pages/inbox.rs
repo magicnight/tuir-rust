@@ -228,7 +228,7 @@ impl crate::pages::Page for InboxPage {
             .split(area);
 
         // ── Header ──────────────────────────────────────────────
-        let header_text = format!(" INBOX • {} messages ", self.messages.len());
+        let header_text = format!(" ▎ INBOX • {} messages ", self.messages.len());
 
         let header = Block::default()
             .title(header_text)
