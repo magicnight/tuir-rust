@@ -17,8 +17,11 @@ pub struct Submission {
     pub permalink: String,
     /// The URL of the submission (may be self.reddit or external)
     pub url: String,
-    /// Self text for self-posts
+    /// Self text for self-posts (raw markdown)
     pub selftext: String,
+    /// Self text rendered to HTML by Reddit (preferred for display)
+    #[serde(default)]
+    pub selftext_html: Option<String>,
     /// Unix timestamp
     pub created_utc: f64,
     /// Whether the submission is distinguished

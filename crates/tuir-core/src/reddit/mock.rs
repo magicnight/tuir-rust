@@ -221,6 +221,11 @@ impl MockRedditClient {
             permalink: format!("/r/{subreddit}/comments/{id}/mock_title"),
             url: format!("https://reddit.com/r/{subreddit}/comments/{id}"),
             selftext: "This is mock content for testing purposes.".to_string(),
+            selftext_html: Some(
+                "<p>This is <strong>mock</strong> content with a \
+                <a href=\"https://rust-lang.org\">link</a> for testing purposes.</p>"
+                    .to_string(),
+            ),
             created_utc: 1700000000.0,
             distinguished: None,
             edited: super::submission::EditedField::Bool(false),

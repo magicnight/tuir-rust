@@ -330,21 +330,24 @@ impl crate::pages::Page for SubmissionPage {
             title_style,
         )]);
 
-        // Self-text
-        let selftext = if self.submission.selftext.is_empty() {
+        // Self-text — prefer Reddit's HTML rendering when available so
+        // links/lists/code survive; fall back to raw markdown otherwise.
+        let body_text = self
+            .submission
+            .selftext_html
+            .as_deref()
+            .map(render_plain_string)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.submission.selftext.clone());
+        let selftext = if body_text.is_empty() {
             Line::from(Span::styled(
                 format!(" [link] {}", self.submission.url),
                 Style::default().fg(Color::Blue),
             ))
         } else {
-            let text = self
-                .submission
-                .selftext
-                .chars()
-                .take(200)
-                .collect::<String>();
+            let preview: String = body_text.chars().take(200).collect();
             Line::from(Span::styled(
-                format!(" {} ", text),
+                format!(" {preview} "),
                 Style::default().fg(Color::Gray),
             ))
         };
@@ -570,6 +573,7 @@ mod tests {
             permalink: "/r/rust/comments/abc123/sample".to_string(),
             url: "https://reddit.com/r/rust/comments/abc123/sample".to_string(),
             selftext: String::new(),
+            selftext_html: None,
             created_utc: 1_700_000_000.0,
             distinguished: None,
             edited: EditedField::Bool(false),

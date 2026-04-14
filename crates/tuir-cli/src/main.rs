@@ -618,6 +618,7 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
                 permalink: format!("/r/{subreddit}/comments/{submission_id}/inbox"),
                 url: format!("https://reddit.com/r/{subreddit}/comments/{submission_id}/"),
                 selftext: page.message.body.clone(),
+                selftext_html: page.message.body_html.clone(),
                 created_utc: page.message.created_utc,
                 distinguished: None,
                 edited: tuir_core::reddit::models::EditedField::Bool(false),
