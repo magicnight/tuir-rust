@@ -19,7 +19,12 @@ tuir-tui = { path = "../tuir-tui" }
 crossterm = "0.28"
 
 # Async
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "rt", "time", "net", "macros"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+# OAuth callback server
+tiny_http = "0.12"
+url = "2"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

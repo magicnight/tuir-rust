@@ -55,10 +55,16 @@ impl OAuth {
 
     /// Build the authorization URL shown to the user.
     pub fn auth_url(&self) -> String {
+        self.auth_url_with_state("tuir")
+    }
+
+    /// Same as [`auth_url`] but lets callers inject their own state nonce to
+    /// defend against CSRF.
+    pub fn auth_url_with_state(&self, state: &str) -> String {
         let query = form_urlencoded::Serializer::new(String::new())
             .append_pair("client_id", &self.client_id)
             .append_pair("response_type", "code")
-            .append_pair("state", "tuir")
+            .append_pair("state", state)
             .append_pair("redirect_uri", &self.redirect_uri)
             .append_pair("duration", "permanent")
             .append_pair("scope", &self.scopes.join(","))

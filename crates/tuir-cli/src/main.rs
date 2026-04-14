@@ -270,7 +270,125 @@ fn do_tui(subreddit: Option<&str>) -> Result<()> {
 fn do_auth(user: Option<&str>) -> Result<()> {
     let config = Config::load()?;
     println!("{}", auth_output(&config, user));
+
+    let client_id = config.reddit.oauth_client_id.clone().unwrap_or_default();
+    if client_id.trim().is_empty() {
+        return Ok(());
+    }
+
+    let scopes: Vec<String> = config
+        .reddit
+        .oauth_scope
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    let oauth = OAuth::new(
+        client_id,
+        config.reddit.oauth_redirect_uri.clone(),
+        scopes,
+    );
+
+    let state = format!("tuir-{}", std::process::id());
+    let auth_url = oauth.auth_url_with_state(&state);
+
+    println!();
+    println!("[AUTH] Open the following URL in your browser:");
+    println!();
+    println!("  {auth_url}");
+    println!();
+    println!(
+        "[AUTH] Waiting for callback on 127.0.0.1:{}...",
+        config.reddit.oauth_redirect_port
+    );
+
+    let code = wait_for_callback(config.reddit.oauth_redirect_port, &state)?;
+    println!("[AUTH] Authorization code received, exchanging for token...");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let http = reqwest::Client::new();
+    let token = rt.block_on(oauth.exchange_code(&http, &code))?;
+
+    let token_path = Config::token_file();
+    token.save(&token_path)?;
+    println!("[AUTH] Token stored at {}", token_path.display());
+    println!("[AUTH] You are now logged in. Launch `tuir` to use the real Reddit backend.");
+
     Ok(())
+}
+
+/// Block until the OAuth provider redirects the browser to our localhost
+/// listener, then extract and return the authorization `code` query param.
+///
+/// `expected_state` is compared against the `state` query param to protect
+/// against cross-site callback injection.
+fn wait_for_callback(port: u16, expected_state: &str) -> Result<String> {
+    let server = tiny_http::Server::http(format!("127.0.0.1:{port}"))
+        .map_err(|e| anyhow::anyhow!("failed to bind callback server: {e}"))?;
+
+    let mut requests = server.incoming_requests();
+    if let Some(request) = requests.next() {
+        let outcome = parse_callback_query(request.url(), expected_state);
+        let (body, result) = match &outcome {
+            Ok(code) => (
+                "<html><body style='font-family: system-ui; padding: 2rem;'>\
+                <h2>✅ tuir-rust authorization complete</h2>\
+                <p>You can close this tab and return to your terminal.</p>\
+                </body></html>"
+                    .to_string(),
+                Ok(code.clone()),
+            ),
+            Err(err) => (
+                format!(
+                    "<html><body style='font-family: system-ui; padding: 2rem;'>\
+                    <h2>❌ tuir-rust authorization failed</h2>\
+                    <p>{err}</p></body></html>"
+                ),
+                Err(anyhow::anyhow!(err.clone())),
+            ),
+        };
+
+        let response = tiny_http::Response::from_string(body)
+            .with_header(
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                    .unwrap(),
+            );
+        let _ = request.respond(response);
+
+        return result;
+    }
+
+    Err(anyhow::anyhow!("callback server closed before receiving a request"))
+}
+
+/// Pure parser used by `wait_for_callback`. Extracts the `code` query param
+/// from a request URL, validating `state` and surfacing `error` params.
+fn parse_callback_query(url: &str, expected_state: &str) -> std::result::Result<String, String> {
+    let parsed = url::Url::parse(&format!("http://localhost{url}"))
+        .map_err(|e| format!("invalid callback URL: {e}"))?;
+    let params: std::collections::HashMap<String, String> =
+        parsed.query_pairs().into_owned().collect();
+
+    if let Some(err) = params.get("error") {
+        return Err(format!("Reddit returned error: {err}"));
+    }
+
+    let code = params
+        .get("code")
+        .ok_or_else(|| "callback URL missing `code` parameter".to_string())?;
+    let state = params
+        .get("state")
+        .ok_or_else(|| "callback URL missing `state` parameter".to_string())?;
+    if state != expected_state {
+        return Err(format!(
+            "state mismatch: expected {expected_state}, got {state}"
+        ));
+    }
+
+    Ok(code.clone())
 }
 
 fn auth_output(config: &Config, user: Option<&str>) -> String {
@@ -508,8 +626,8 @@ fn do_list_themes() -> Result<()> {
 mod tests {
     use super::{
         auth_output, banner_for_width, build_switched_page, longest_visible_line_width,
-        render_banner, AppPage, COMPACT_COLORS, COMPACT_ROWS, HERO_COLORS, HERO_ROWS,
-        MIN_HERO_WIDTH,
+        parse_callback_query, render_banner, AppPage, COMPACT_COLORS, COMPACT_ROWS, HERO_COLORS,
+        HERO_ROWS, MIN_HERO_WIDTH,
     };
     use tuir_core::{config::Config, reddit::models::Message};
     use tuir_tui::pages::{inbox::InboxPage, message::MessagePage, PageKind};
@@ -595,6 +713,30 @@ mod tests {
     }
 
     use super::visible_line_width;
+
+    #[test]
+    fn parse_callback_query_returns_code_on_matching_state() {
+        let code = parse_callback_query("/?code=abc123&state=nonce-1", "nonce-1").unwrap();
+        assert_eq!(code, "abc123");
+    }
+
+    #[test]
+    fn parse_callback_query_rejects_state_mismatch() {
+        let err = parse_callback_query("/?code=abc&state=wrong", "nonce-1").unwrap_err();
+        assert!(err.contains("state mismatch"));
+    }
+
+    #[test]
+    fn parse_callback_query_surfaces_reddit_error() {
+        let err = parse_callback_query("/?error=access_denied&state=n", "n").unwrap_err();
+        assert!(err.contains("access_denied"));
+    }
+
+    #[test]
+    fn parse_callback_query_requires_code_param() {
+        let err = parse_callback_query("/?state=n", "n").unwrap_err();
+        assert!(err.contains("missing `code`"));
+    }
 
     #[test]
     fn auth_output_guides_when_client_id_is_missing() {
