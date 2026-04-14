@@ -173,19 +173,51 @@ impl AppPage {
     }
 }
 
+/// Wire tracing to a daily-rotated file under the tuir data directory.
+///
+/// Returns a [`WorkerGuard`] that must be kept alive until `main` exits —
+/// dropping it flushes buffered log lines. We route everything to a file
+/// because the TUI owns stderr; writing log lines to the terminal would
+/// corrupt the ratatui draw loop.
+fn init_logging(verbose: bool) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let data_dir = Config::data_dir();
+    if let Err(err) = std::fs::create_dir_all(&data_dir) {
+        eprintln!(
+            "[tuir] warning: could not create log dir {}: {err}",
+            data_dir.display()
+        );
+        return None;
+    }
+
+    let file_appender = tracing_appender::rolling::daily(&data_dir, "tuir.log");
+    let (writer, guard) = tracing_appender::non_blocking(file_appender);
+    let level = if verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+
+    let result = tracing_subscriber::fmt()
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_max_level(level)
+        .try_init();
+
+    if let Err(err) = result {
+        // Another crate beat us to the global subscriber — not fatal.
+        eprintln!("[tuir] warning: logging already initialized: {err}");
+    }
+
+    Some(guard)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
-    if cli.verbose {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .init();
-    }
+    // All diagnostics go to a daily-rotated log file. Writing to stderr would
+    // corrupt the TUI, and the sub-commands that run without a TUI benefit
+    // from the same destination so users have a single place to tail.
+    let _log_guard = init_logging(cli.verbose);
 
     match &cli.command {
         Some(Commands::Auth { user }) => {
