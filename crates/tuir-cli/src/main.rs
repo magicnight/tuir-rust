@@ -389,7 +389,13 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
                         }
                         let action = current_page.handle_key(key);
                         match action {
-                            PageAction::Quit => break,
+                            PageAction::Quit => {
+                                if stack.len() > 1 {
+                                    stack.pop();
+                                } else {
+                                    break;
+                                }
+                            }
                             PageAction::Back => {
                                 if stack.len() > 1 {
                                     stack.pop();
