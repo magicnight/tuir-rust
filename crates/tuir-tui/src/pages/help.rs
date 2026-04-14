@@ -2,6 +2,8 @@
 
 use crate::keymap::KeyAction;
 use crate::pages::{Page, PageAction};
+use crate::theme::AppTheme;
+use std::sync::Arc;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -13,11 +15,19 @@ use ratatui::{
 
 pub struct HelpPage {
     scroll: u16,
+    pub theme: Arc<AppTheme>,
 }
 
 impl HelpPage {
     pub fn new() -> Self {
-        Self { scroll: 0 }
+        Self {
+            scroll: 0,
+            theme: Arc::new(AppTheme::default()),
+        }
+    }
+
+    pub fn set_theme(&mut self, theme: Arc<AppTheme>) {
+        self.theme = theme;
     }
 
     fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
@@ -54,41 +64,28 @@ impl HelpPage {
         ]
     }
 
-    fn rendered_lines() -> Vec<Line<'static>> {
+    fn rendered_lines(theme: &AppTheme) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(Span::styled(
             "TUIR-RUST — keybindings",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            theme.stickied,
         )));
         lines.push(Line::from(""));
 
         for (heading, entries) in Self::sections() {
-            lines.push(Line::from(Span::styled(
-                heading,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
+            lines.push(Line::from(Span::styled(heading, theme.author)));
             for (key, desc) in entries {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(
-                        format!("{key:<12}"),
-                        Style::default().fg(Color::Green),
-                    ),
+                    Span::styled(format!("{key:<12}"), theme.upvote),
                     Span::raw("  "),
-                    Span::styled(desc, Style::default().fg(Color::White)),
+                    Span::raw(desc.to_string()),
                 ]));
             }
             lines.push(Line::from(""));
         }
 
-        lines.push(Line::from(Span::styled(
-            "Esc or q — back",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(Line::from(Span::styled("Esc or q — back", theme.muted)));
         lines
     }
 }
@@ -111,7 +108,7 @@ impl Page for HelpPage {
             .title(" HELP ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+            .style(self.theme.header);
         frame.render_widget(header, chunks[0]);
 
         let body_block = Block::default()
@@ -120,7 +117,7 @@ impl Page for HelpPage {
         let inner = body_block.inner(chunks[1]);
         frame.render_widget(body_block, chunks[1]);
 
-        let paragraph = Paragraph::new(Self::rendered_lines())
+        let paragraph = Paragraph::new(Self::rendered_lines(&self.theme))
             .wrap(Wrap { trim: false })
             .scroll((self.scroll, 0));
         frame.render_widget(paragraph, inner);
@@ -129,7 +126,7 @@ impl Page for HelpPage {
             .title(" j/k:Scroll | Esc/q:Back ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 20)));
+            .style(self.theme.footer);
         frame.render_widget(footer, chunks[2]);
     }
 

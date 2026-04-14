@@ -172,6 +172,18 @@ impl AppPage {
     fn is_help(&self) -> bool {
         matches!(self, Self::Help(_))
     }
+
+    /// Borrow the active page's theme so children inherit it on switch.
+    fn theme(&self) -> Arc<AppTheme> {
+        match self {
+            Self::Subreddit(p) => Arc::clone(&p.theme),
+            Self::Submission(p) => Arc::clone(&p.theme),
+            Self::Message(p) => Arc::clone(&p.theme),
+            Self::Inbox(p) => Arc::clone(&p.theme),
+            Self::Subscription(p) => Arc::clone(&p.theme),
+            Self::Help(p) => Arc::clone(&p.theme),
+        }
+    }
 }
 
 /// Wire tracing to a daily-rotated file under the tuir data directory.
@@ -504,7 +516,9 @@ fn do_inbox(subreddit: Option<&str>) -> Result<()> {
 
     let config = Config::load().unwrap_or_default();
     let client = build_client(&config);
+    let theme = build_theme(&config);
     let mut page = InboxPage::with_client(client);
+    page.set_theme(Arc::clone(&theme));
     page.load_sync();
     run_app(AppPage::Inbox(page))?;
     Ok(())
@@ -516,7 +530,9 @@ fn do_subscriptions() -> Result<()> {
 
     let config = Config::load().unwrap_or_default();
     let client = build_client(&config);
+    let theme = build_theme(&config);
     let mut page = SubscriptionPage::with_client(client);
+    page.set_theme(Arc::clone(&theme));
     page.load_sync();
     run_app(AppPage::Subscription(page))?;
     Ok(())
@@ -553,7 +569,10 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
                 if let Ok(Event::Key(key)) = event::read() {
                     if key.kind == KeyEventKind::Press {
                         if is_help_shortcut(&key) && !current_page.is_help() {
-                            stack.push(AppPage::Help(HelpPage::new()));
+                            let inherited = current_page.theme();
+                            let mut help = HelpPage::new();
+                            help.set_theme(inherited);
+                            stack.push(AppPage::Help(help));
                             continue;
                         }
                         let action = current_page.handle_key(key);
@@ -603,6 +622,7 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
             let idx = page.list_state.selected()?;
             let submission = page.submissions.get(idx)?.clone();
             let mut next_page = SubmissionPage::with_client(submission, Arc::clone(&page.client));
+            next_page.set_theme(Arc::clone(&page.theme));
             next_page.load_sync();
             Some(AppPage::Submission(next_page))
         }
@@ -610,13 +630,16 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
             let idx = page.list_state.selected()?;
             let subreddit = page.subreddits.get(idx)?.display_name.clone();
             let mut next_page = SubredditPage::with_client(&subreddit, Arc::clone(&page.client));
+            next_page.set_theme(Arc::clone(&page.theme));
             next_page.load_sync();
             Some(AppPage::Subreddit(next_page))
         }
         (AppPage::Inbox(page), PageKind::Message) => {
             let idx = page.list_state.selected()?;
             let message = page.messages.get(idx)?.clone();
-            Some(AppPage::Message(MessagePage::new(message)))
+            let mut next_page = MessagePage::new(message);
+            next_page.set_theme(Arc::clone(&page.theme));
+            Some(AppPage::Message(next_page))
         }
         (AppPage::Message(page), PageKind::Submission) => {
             let submission_id = page
@@ -653,6 +676,7 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
                 url_full: None,
             };
             let mut next_page = SubmissionPage::new(submission);
+            next_page.set_theme(Arc::clone(&page.theme));
             next_page.load_sync();
             Some(AppPage::Submission(next_page))
         }

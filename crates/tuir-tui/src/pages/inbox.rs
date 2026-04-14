@@ -1,6 +1,7 @@
 //! Inbox page (messages and replies)
 
 use crate::keymap::KeyAction;
+use crate::theme::AppTheme;
 use crate::PageAction;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::{
@@ -20,6 +21,7 @@ pub struct InboxPage {
     pub list_state: ListState,
     pub loading: bool,
     pub client: Arc<dyn RedditApi>,
+    pub theme: Arc<AppTheme>,
 }
 
 impl InboxPage {
@@ -34,7 +36,12 @@ impl InboxPage {
             list_state: ListState::default(),
             loading: false,
             client,
+            theme: Arc::new(AppTheme::default()),
         }
+    }
+
+    pub fn set_theme(&mut self, theme: Arc<AppTheme>) {
+        self.theme = theme;
     }
 
     /// Load messages from inbox
@@ -162,8 +169,8 @@ impl InboxPage {
         }
     }
 
-    /// Format a single message for display
-    fn format_message(msg: &Message) -> Line<'_> {
+    /// Format a single message for display, styled via the active theme.
+    fn format_message<'a>(msg: &'a Message, theme: &AppTheme) -> Line<'a> {
         let unread_marker = if msg.new { "● " } else { "  " };
         let subject = if msg.subject.len() > 50 {
             format!("{}...", &msg.subject[..47])
@@ -179,36 +186,21 @@ impl InboxPage {
 
         let time = Self::format_timestamp(msg.created_utc);
 
-        // Build spans with owned strings
-        let mut spans: Vec<Span<'_>> = Vec::new();
-
+        let mut spans: Vec<Span<'a>> = Vec::new();
         spans.push(Span::raw(unread_marker));
-        spans.push(Span::styled(
-            msg.author.as_str(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(msg.author.as_str(), theme.author));
         spans.push(Span::raw(" • "));
 
-        // Subject (owned)
+        // Unread subjects get the same emphasis as "stickied" posts; read
+        // subjects render in the default foreground so they recede.
         let subject_style = if msg.new {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            theme.stickied
         } else {
-            Style::default().fg(Color::White)
+            Style::default()
         };
         spans.push(Span::styled(subject, subject_style));
-
         spans.push(Span::raw("\n    "));
-
-        // Body preview (owned)
-        spans.push(Span::styled(
-            body_preview,
-            Style::default().fg(Color::DarkGray),
-        ));
-
+        spans.push(Span::styled(body_preview, theme.muted));
         spans.push(Span::raw(format!(" • {}", time)));
 
         Line::from(spans)
@@ -242,7 +234,7 @@ impl crate::pages::Page for InboxPage {
             .title(header_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+            .style(self.theme.header);
 
         frame.render_widget(header, chunks[0]);
 
@@ -255,24 +247,23 @@ impl crate::pages::Page for InboxPage {
         frame.render_widget(content_block, chunks[1]);
 
         if self.loading {
-            let para = Paragraph::new("Loading inbox...").style(Style::default().fg(Color::Gray));
+            let para = Paragraph::new("Loading inbox...").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else if self.messages.is_empty() {
-            let para =
-                Paragraph::new("No messages in inbox.").style(Style::default().fg(Color::DarkGray));
+            let para = Paragraph::new("No messages in inbox.").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else {
-            let items: Vec<ListItem> = self
-                .messages
-                .iter()
-                .map(|msg| ListItem::new(Self::format_message(msg)))
-                .collect();
+            let items: Vec<ListItem> = {
+                let theme = &*self.theme;
+                self.messages
+                    .iter()
+                    .map(|msg| ListItem::new(Self::format_message(msg, theme)))
+                    .collect()
+            };
 
-            let list = List::new(items).block(Block::default()).highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(40, 40, 40))
-                    .add_modifier(Modifier::BOLD),
-            );
+            let list = List::new(items)
+                .block(Block::default())
+                .highlight_style(self.theme.selected);
 
             frame.render_stateful_widget(list, inner, &mut self.list_state);
         }
@@ -283,7 +274,7 @@ impl crate::pages::Page for InboxPage {
             .title(footer_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 20)));
+            .style(self.theme.footer);
 
         frame.render_widget(footer, chunks[2]);
     }

@@ -1,5 +1,6 @@
 //! Submission list widget
 
+use crate::theme::AppTheme;
 use ratatui::{
     prelude::*,
     widgets::{Block, BorderType, Borders, List, ListItem, ListState},
@@ -44,8 +45,13 @@ impl SortOrder {
     }
 }
 
-/// Format a single submission as a Line
-pub fn format_submission(idx: usize, sub: &Submission, vote: VoteState) -> Line<'static> {
+/// Format a single submission as a Line, styled via [`AppTheme`].
+pub fn format_submission(
+    idx: usize,
+    sub: &Submission,
+    vote: VoteState,
+    theme: &AppTheme,
+) -> Line<'static> {
     let mut spans = Vec::new();
 
     // Index
@@ -53,14 +59,8 @@ pub fn format_submission(idx: usize, sub: &Submission, vote: VoteState) -> Line<
 
     // Vote indicator
     match vote {
-        VoteState::Up => spans.push(Span::styled(
-            format!("▲ {} ", sub.score),
-            Style::default().fg(Color::Green),
-        )),
-        VoteState::Down => spans.push(Span::styled(
-            format!("▼ {} ", sub.score),
-            Style::default().fg(Color::Red),
-        )),
+        VoteState::Up => spans.push(Span::styled(format!("▲ {} ", sub.score), theme.upvote)),
+        VoteState::Down => spans.push(Span::styled(format!("▼ {} ", sub.score), theme.downvote)),
         VoteState::None => spans.push(Span::raw(format!("  {} ", sub.score))),
     }
 
@@ -74,9 +74,9 @@ pub fn format_submission(idx: usize, sub: &Submission, vote: VoteState) -> Line<
     };
 
     let title_style = if sub.over_18 {
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        theme.nsfw
     } else if sub.stickied {
-        Style::default().fg(Color::Green)
+        theme.stickied
     } else {
         Style::default()
     };
@@ -85,7 +85,7 @@ pub fn format_submission(idx: usize, sub: &Submission, vote: VoteState) -> Line<
     // Metadata
     spans.push(Span::styled(
         format!("  r/{} • {} comments", sub.subreddit, sub.num_comments),
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     ));
 
     Line::from(spans)
@@ -98,6 +98,7 @@ pub fn render_submission_list(
     submissions: &[Submission],
     vote_states: &[VoteState],
     state: &mut ListState,
+    theme: &AppTheme,
 ) {
     if submissions.is_empty() {
         let block = Block::default()
@@ -113,7 +114,7 @@ pub fn render_submission_list(
         .enumerate()
         .map(|(i, sub)| {
             let vote = vote_states.get(i).copied().unwrap_or_default();
-            let line = format_submission(i, sub, vote);
+            let line = format_submission(i, sub, vote, theme);
             ListItem::new(line)
         })
         .collect();
@@ -125,11 +126,7 @@ pub fn render_submission_list(
                 .borders(Borders::ALL)
                 .border_type(BorderType::Plain),
         )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(40, 40, 40))
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme.selected);
 
     f.render_stateful_widget(list, area, state);
 }

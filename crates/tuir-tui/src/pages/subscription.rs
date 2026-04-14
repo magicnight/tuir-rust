@@ -1,6 +1,7 @@
 //! Subscription / multi-reddit listing page
 
 use crate::keymap::KeyAction;
+use crate::theme::AppTheme;
 use crate::PageAction;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::{
@@ -20,6 +21,7 @@ pub struct SubscriptionPage {
     pub list_state: ListState,
     pub loading: bool,
     pub client: Arc<dyn RedditApi>,
+    pub theme: Arc<AppTheme>,
 }
 
 impl SubscriptionPage {
@@ -34,7 +36,12 @@ impl SubscriptionPage {
             list_state: ListState::default(),
             loading: false,
             client,
+            theme: Arc::new(AppTheme::default()),
         }
+    }
+
+    pub fn set_theme(&mut self, theme: Arc<AppTheme>) {
+        self.theme = theme;
     }
 
     /// Load subscribed subreddits
@@ -110,7 +117,7 @@ impl SubscriptionPage {
     }
 
     /// Format a single subreddit for display
-    fn format_subreddit(sub: &Subreddit, idx: usize) -> Line<'_> {
+    fn format_subreddit<'a>(sub: &'a Subreddit, idx: usize, theme: &AppTheme) -> Line<'a> {
         let icon = if sub.over18 { "🔞 " } else { "📚 " };
         let subscriber_str = Self::format_subscribers(sub.subscribers);
         let active_str = sub.active_user_count.map(|c| {
@@ -124,12 +131,7 @@ impl SubscriptionPage {
         Line::from(vec![
             Span::raw(format!("{:<3} ", idx + 1)),
             Span::raw(icon),
-            Span::styled(
-                sub.display_name.as_str(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(sub.display_name.clone(), theme.author),
             Span::raw(format!(" • {} subscribers", subscriber_str)),
             if let Some(active) = active_str {
                 Span::raw(format!(" • {} active", active))
@@ -137,7 +139,7 @@ impl SubscriptionPage {
                 Span::raw("")
             },
             if sub.user_is_subscriber.unwrap_or(false) {
-                Span::styled(" ★", Style::default().fg(Color::Yellow))
+                Span::styled(" ★", theme.stickied)
             } else {
                 Span::raw("")
             },
@@ -190,7 +192,7 @@ impl crate::pages::Page for SubscriptionPage {
             .title(header_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+            .style(self.theme.header);
 
         frame.render_widget(header, chunks[0]);
 
@@ -204,27 +206,26 @@ impl crate::pages::Page for SubscriptionPage {
         frame.render_widget(content_block, chunks[1]);
 
         if self.loading {
-            let para =
-                Paragraph::new("Loading subscriptions...").style(Style::default().fg(Color::Gray));
+            let para = Paragraph::new("Loading subscriptions...").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else if self.subreddits.is_empty() {
             let para =
                 Paragraph::new("No subscriptions found.\nUse ' subreddits --sync' to update.")
-                    .style(Style::default().fg(Color::DarkGray));
+                    .style(self.theme.muted);
             frame.render_widget(para, inner);
         } else {
-            let items: Vec<ListItem> = self
-                .subreddits
-                .iter()
-                .enumerate()
-                .map(|(i, sub)| ListItem::new(Self::format_subreddit(sub, i)))
-                .collect();
+            let items: Vec<ListItem> = {
+                let theme = &*self.theme;
+                self.subreddits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sub)| ListItem::new(Self::format_subreddit(sub, i, theme)))
+                    .collect()
+            };
 
-            let list = List::new(items).block(Block::default()).highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(40, 40, 40))
-                    .add_modifier(Modifier::BOLD),
-            );
+            let list = List::new(items)
+                .block(Block::default())
+                .highlight_style(self.theme.selected);
 
             frame.render_stateful_widget(list, inner, &mut self.list_state);
         }
@@ -235,7 +236,7 @@ impl crate::pages::Page for SubscriptionPage {
             .title(footer_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 20)));
+            .style(self.theme.footer);
 
         frame.render_widget(footer, chunks[2]);
     }

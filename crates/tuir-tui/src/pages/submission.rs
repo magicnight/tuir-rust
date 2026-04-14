@@ -1,6 +1,7 @@
 //! Submission detail page with comment tree
 
 use crate::keymap::KeyAction;
+use crate::theme::AppTheme;
 use crate::widgets::VoteState;
 use crate::PageAction;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
@@ -90,6 +91,7 @@ pub struct SubmissionPage {
     pub vote_state: VoteState,
     pub client: Arc<dyn RedditApi>,
     pub loading: bool,
+    pub theme: Arc<AppTheme>,
 }
 
 impl SubmissionPage {
@@ -107,7 +109,13 @@ impl SubmissionPage {
             vote_state: VoteState::None,
             client,
             loading: false,
+            theme: Arc::new(AppTheme::default()),
         }
+    }
+
+    /// Inject a shared theme. See [`crate::pages::subreddit::SubredditPage::set_theme`].
+    pub fn set_theme(&mut self, theme: Arc<AppTheme>) {
+        self.theme = theme;
     }
 
     /// Load submission and comments
@@ -305,22 +313,21 @@ impl crate::pages::Page for SubmissionPage {
             .title(header_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+            .style(self.theme.header);
 
         frame.render_widget(header, chunks[0]);
 
         // ── Submission Content ────────────────────────────────────
         let submission_block = Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+            .border_type(BorderType::Plain);
 
         let inner = submission_block.inner(chunks[1]);
         frame.render_widget(submission_block, chunks[1]);
 
         // Title
         let title_style = if self.submission.over_18 {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            self.theme.nsfw
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
@@ -342,21 +349,18 @@ impl crate::pages::Page for SubmissionPage {
         let selftext = if body_text.is_empty() {
             Line::from(Span::styled(
                 format!(" [link] {}", self.submission.url),
-                Style::default().fg(Color::Blue),
+                self.theme.link,
             ))
         } else {
             let preview: String = body_text.chars().take(200).collect();
-            Line::from(Span::styled(
-                format!(" {preview} "),
-                Style::default().fg(Color::Gray),
-            ))
+            Line::from(Span::styled(format!(" {preview} "), self.theme.muted))
         };
 
         let meta = Line::from(vec![
             Span::raw(" "),
-            Span::styled("▲ ", Style::default().fg(Color::Green)),
+            Span::styled("▲ ", self.theme.upvote),
             Span::raw(format!("{} ", self.submission.score)),
-            Span::styled("💬 ", Style::default().fg(Color::Cyan)),
+            Span::styled("💬 ", self.theme.author),
             Span::raw(format!("{} ", self.submission.num_comments)),
         ]);
 
@@ -370,8 +374,7 @@ impl crate::pages::Page for SubmissionPage {
         let comment_header = Block::default()
             .title(format!(" Comments: {} ", self.flattened.len()))
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(25, 25, 35)));
+            .border_type(BorderType::Plain);
 
         let comment_area = chunks[2];
         frame.render_widget(&comment_header, comment_area);
@@ -379,33 +382,27 @@ impl crate::pages::Page for SubmissionPage {
         let inner = comment_header.inner(comment_area);
 
         if self.loading {
-            let para =
-                Paragraph::new("Loading comments...").style(Style::default().fg(Color::Gray));
+            let para = Paragraph::new("Loading comments...").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else if self.flattened.is_empty() {
-            let para =
-                Paragraph::new("No comments yet.").style(Style::default().fg(Color::DarkGray));
+            let para = Paragraph::new("No comments yet.").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else {
-            let items: Vec<ListItem> = self
-                .flattened
-                .iter()
-                .filter_map(|&comment_idx| {
-                    if comment_idx < self.comments.len() {
-                        Some(ListItem::new(Self::format_comment(
-                            &self.comments[comment_idx],
-                        )))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            // Build the list items first to drop the immutable borrow on
+            // self before we hand list_state out as &mut.
+            let items: Vec<ListItem> = {
+                let comments = &self.comments;
+                let theme = &*self.theme;
+                self.flattened
+                    .iter()
+                    .filter_map(|&comment_idx| comments.get(comment_idx))
+                    .map(|node| ListItem::new(format_comment_line(node, theme)))
+                    .collect()
+            };
 
-            let list = List::new(items).block(Block::default()).highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(40, 40, 40))
-                    .add_modifier(Modifier::BOLD),
-            );
+            let list = List::new(items)
+                .block(Block::default())
+                .highlight_style(self.theme.selected);
 
             frame.render_stateful_widget(list, inner, &mut self.list_state);
         }
@@ -416,7 +413,7 @@ impl crate::pages::Page for SubmissionPage {
             .title(footer_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 20)));
+            .style(self.theme.footer);
 
         frame.render_widget(footer, chunks[3]);
     }
@@ -467,83 +464,67 @@ impl SubmissionPage {
         }
     }
 
-    /// Format a single comment for display
-    fn format_comment(node: &CommentNode) -> Line<'_> {
-        let depth = node.comment.depth.unwrap_or(0) as u32;
+}
 
-        let body_text = if node.collapsed {
-            format!("[–] {} ({} hidden)", node.comment.author, node.reply_count)
-        } else if node.is_more() {
-            "[+] Load more comments".to_string()
-        } else {
-            // Prefer the server-rendered HTML body; render_plain_string keeps
-            // links, code fences, and list markers while staying printable.
-            // Falls back to the raw markdown body when HTML is absent.
-            let rendered = node
-                .comment
-                .body_html
-                .as_deref()
-                .map(render_plain_string)
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| node.comment.body.clone());
-            // Collapse to a single line for list preview; full body is shown
-            // when we eventually add an expanded-comment mode.
-            rendered
-                .split('\n')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · ")
-                .chars()
-                .take(160)
-                .collect::<String>()
-        };
+/// Standalone comment formatter — extracted so it can run while
+/// `&mut self.list_state` is held by the caller.
+fn format_comment_line<'a>(node: &'a CommentNode, theme: &AppTheme) -> Line<'a> {
+    let depth = node.comment.depth.unwrap_or(0) as u32;
 
-        let depth_color = match depth % 4 {
-            0 => Color::Yellow,
-            1 => Color::Green,
-            2 => Color::Cyan,
-            3 => Color::Magenta,
-            _ => Color::White,
-        };
+    let body_text = if node.collapsed {
+        format!("[–] {} ({} hidden)", node.comment.author, node.reply_count)
+    } else if node.is_more() {
+        "[+] Load more comments".to_string()
+    } else {
+        let rendered = node
+            .comment
+            .body_html
+            .as_deref()
+            .map(render_plain_string)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| node.comment.body.clone());
+        rendered
+            .split('\n')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ")
+            .chars()
+            .take(160)
+            .collect::<String>()
+    };
 
-        let time = Self::format_timestamp(node.comment.created_utc);
+    let depth_color = match depth % 4 {
+        0 => Color::Yellow,
+        1 => Color::Green,
+        2 => Color::Cyan,
+        3 => Color::Magenta,
+        _ => Color::White,
+    };
 
-        let score_str = match node.comment.likes.unwrap_or(0) {
-            1 => format!("▲{}", node.comment.score),
-            -1 => format!("▼{}", node.comment.score),
-            _ => format!(" {}", node.comment.score),
-        };
+    let time = SubmissionPage::format_timestamp(node.comment.created_utc);
 
-        // Build spans
-        let mut spans: Vec<Span<'_>> = Vec::new();
+    let score_str = match node.comment.likes.unwrap_or(0) {
+        1 => format!("▲{}", node.comment.score),
+        -1 => format!("▼{}", node.comment.score),
+        _ => format!(" {}", node.comment.score),
+    };
 
-        // Depth indicator
-        spans.push(Span::raw(Self::format_depth(depth)));
+    let mut spans: Vec<Span<'_>> = Vec::new();
+    spans.push(Span::raw(SubmissionPage::format_depth(depth)));
+    spans.push(Span::styled(node.comment.author.as_str(), theme.author));
+    spans.push(Span::raw(format!(" • {} • {} ", score_str, time)));
 
-        // Author
+    if node.collapsed {
         spans.push(Span::styled(
-            node.comment.author.as_str(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            format!("[–] {} replies", node.reply_count),
+            theme.muted,
         ));
-
-        // Score & time
-        spans.push(Span::raw(format!(" • {} • {} ", score_str, time)));
-
-        // Body
-        if node.collapsed {
-            spans.push(Span::styled(
-                format!("[–] {} replies", node.reply_count),
-                Style::default().fg(Color::DarkGray),
-            ));
-        } else {
-            spans.push(Span::styled(body_text, Style::default().fg(depth_color)));
-        }
-
-        Line::from(spans)
+    } else {
+        spans.push(Span::styled(body_text, Style::default().fg(depth_color)));
     }
+
+    Line::from(spans)
 }
 
 impl From<VoteState> for i8 {

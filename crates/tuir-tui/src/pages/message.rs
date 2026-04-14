@@ -2,10 +2,11 @@
 
 use crate::keymap::KeyAction;
 use crate::pages::PageAction;
+use crate::theme::AppTheme;
+use std::sync::Arc;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    prelude::*,
     text::Line,
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
@@ -15,11 +16,19 @@ use tuir_core::reddit::models::Message;
 
 pub struct MessagePage {
     pub message: Message,
+    pub theme: Arc<AppTheme>,
 }
 
 impl MessagePage {
     pub fn new(message: Message) -> Self {
-        Self { message }
+        Self {
+            message,
+            theme: Arc::new(AppTheme::default()),
+        }
+    }
+
+    pub fn set_theme(&mut self, theme: Arc<AppTheme>) {
+        self.theme = theme;
     }
 
     fn format_timestamp(created_utc: f64) -> String {
@@ -64,13 +73,12 @@ impl crate::pages::Page for MessagePage {
             ))
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+            .style(self.theme.header);
         frame.render_widget(header, chunks[0]);
 
         let meta_block = Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+            .border_type(BorderType::Plain);
         let meta_inner = meta_block.inner(chunks[1]);
         frame.render_widget(meta_block, chunks[1]);
         let target = self
@@ -89,8 +97,7 @@ impl crate::pages::Page for MessagePage {
         let body_block = Block::default()
             .title(" Body ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(25, 25, 35)));
+            .border_type(BorderType::Plain);
         let body_inner = body_block.inner(chunks[2]);
         frame.render_widget(body_block, chunks[2]);
         let body_text = self
@@ -104,10 +111,10 @@ impl crate::pages::Page for MessagePage {
         frame.render_widget(body, body_inner);
 
         let footer = Block::default()
-            .title(" Enter:o/Open thread | Esc:Back | q:Quit ")
+            .title(" Enter:o/Open thread | Esc:Back | q:Back ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
-            .style(Style::default().bg(Color::Rgb(30, 30, 20)));
+            .style(self.theme.footer);
         frame.render_widget(footer, chunks[3]);
     }
 
