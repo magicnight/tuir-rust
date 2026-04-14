@@ -406,7 +406,7 @@ impl crate::pages::Page for SubmissionPage {
         }
 
         // ── Footer ───────────────────────────────────────────────
-        let footer_text = " c:Collapse | a:Upvote | z:Downvote | j/k:Navigate | q:Back ";
+        let footer_text = " j/k:Nav | c:Collapse | a/z:Vote | r:Refresh | ?:Help | q:Back ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)

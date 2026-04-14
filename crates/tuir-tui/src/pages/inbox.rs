@@ -269,7 +269,8 @@ impl crate::pages::Page for InboxPage {
         }
 
         // ── Footer ───────────────────────────────────────────────
-        let footer_text = " j/k:Navigate | Enter:Open | u:Toggle unread | q:Back | r:Refresh ";
+        let footer_text =
+            " j/k:Nav | Enter:Open | u:Toggle unread | r:Refresh | ?:Help | q:Quit ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)

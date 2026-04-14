@@ -209,9 +209,7 @@ impl crate::pages::Page for SubscriptionPage {
             let para = Paragraph::new("Loading subscriptions...").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else if self.subreddits.is_empty() {
-            let para =
-                Paragraph::new("No subscriptions found.\nUse ' subreddits --sync' to update.")
-                    .style(self.theme.muted);
+            let para = Paragraph::new("No subscriptions yet.").style(self.theme.muted);
             frame.render_widget(para, inner);
         } else {
             let items: Vec<ListItem> = {
@@ -231,7 +229,7 @@ impl crate::pages::Page for SubscriptionPage {
         }
 
         // ── Footer ───────────────────────────────────────────────
-        let footer_text = " j/k:Navigate | Enter:Open r/sub | q:Back | r:Refresh ";
+        let footer_text = " j/k:Nav | Enter:Open | r:Refresh | ?:Help | q:Quit ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)

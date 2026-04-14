@@ -111,7 +111,7 @@ impl crate::pages::Page for MessagePage {
         frame.render_widget(body, body_inner);
 
         let footer = Block::default()
-            .title(" Enter:o/Open thread | Esc:Back | q:Back ")
+            .title(" Enter:Open thread | ?:Help | q:Back ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .style(self.theme.footer);

@@ -230,7 +230,8 @@ impl crate::pages::Page for SubredditPage {
         );
 
         // Footer
-        let footer_text = " j/k:Nav | 1-5:Sort hot/new/top/contro/rising | a/z:Vote | r:Refresh | q:Quit ";
+        let footer_text =
+            " j/k:Nav | Enter:Open | a/z:Vote | 1-5:Sort | r:Refresh | ?:Help | q:Quit ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)

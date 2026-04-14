@@ -47,18 +47,29 @@ impl HelpPage {
                 "Actions",
                 vec![
                     ("Enter / o", "Open selected item"),
-                    ("Esc", "Back to previous page"),
-                    ("r", "Refresh current page"),
                     ("a", "Upvote"),
                     ("z", "Downvote"),
+                    ("c", "Collapse comment subtree"),
                     ("u", "Toggle inbox read/unread"),
+                    ("r", "Refresh current page"),
+                ],
+            ),
+            (
+                "Sort (subreddit)",
+                vec![
+                    ("1", "Hot"),
+                    ("2", "New"),
+                    ("3", "Top"),
+                    ("4", "Controversial"),
+                    ("5", "Rising"),
                 ],
             ),
             (
                 "Global",
                 vec![
                     ("?", "Toggle this help page"),
-                    ("q", "Quit tuir"),
+                    ("Esc", "Back to previous page"),
+                    ("q", "Back, or Quit on the root page"),
                 ],
             ),
         ]
@@ -123,7 +134,7 @@ impl Page for HelpPage {
         frame.render_widget(paragraph, inner);
 
         let footer = Block::default()
-            .title(" j/k:Scroll | Esc/q:Back ")
+            .title(" j/k:Scroll | ?:Close | q:Back ")
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .style(self.theme.footer);
