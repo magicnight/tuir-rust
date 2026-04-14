@@ -90,27 +90,46 @@ tuir-rust/
 
 | Component | Library | Notes |
 |-----------|---------|-------|
-| TUI framework | [ratatui](https://github.com/ratatui/ratatui) | Successor to tui-rs, immediate-mode rendering |
-| Terminal I/O | [crossterm](https://github.com/crossterm-rs/crossterm) | Cross-platform terminal manipulation |
-| HTTP client | [reqwest](https://github.com/seanmonstar/reqwest) | Async HTTP with TLS |
-| OAuth2 | [oauth2](https://github.com/ramosbugs/oauth2-rs) | Reddit OAuth flow |
+| TUI framework | [ratatui](https://github.com/ratatui/ratatui) 0.30 | Immediate-mode rendering |
+| Terminal I/O | [crossterm](https://github.com/crossterm-rs/crossterm) 0.29 | Cross-platform terminal manipulation |
+| Inline images | [ratatui-image](https://github.com/benjajaja/ratatui-image) 10 + [image](https://github.com/image-rs/image) 0.25 | Kitty / iTerm2 / Sixel / half-block |
+| HTTP client | [reqwest](https://github.com/seanmonstar/reqwest) 0.12 | Async HTTP with TLS |
+| OAuth2 callback | [tiny_http](https://github.com/tiny-http/tiny-http) | Localhost listener for installed-app flow |
+| HTML rendering | [scraper](https://github.com/causal-agent/scraper) | DOM walker for `body_html` / `selftext_html` |
 | Config | [configparser](https://github.com/youknowone/configparser) | INI file parsing |
+
+## What works today
+
+The browse loop is end-to-end functional — both against the bundled `MockRedditClient` (no credentials required) and against the real Reddit API once you've completed `tuir auth`.
+
+- **Subreddit listing** — hot/new/top/controversial/rising via `1`–`5`, `a`/`z` voting, `r` refresh
+- **`/` goto prompt** — type any subreddit name (with or without `r/` prefix), Enter to jump, Esc to cancel
+- **Submission view** — proper recursive comment tree with `c` collapse, HTML body rendering for both `selftext_html` and comment `body_html`
+- **Inline media preview** — press `i` on a submission with image media. Auto-detects [kitty](https://sw.kovidgoyal.net/kitty/graphics-protocol/) / [iTerm2](https://iterm2.com/documentation-images.html) / [Sixel](https://en.wikipedia.org/wiki/Sixel) / Unicode half-blocks. Set `media_style = retro` in your config to **force half-blocks even on capable terminals** for that classic [browsh](https://github.com/browsh-org/browsh) aesthetic.
+- **External viewer** — press `o` to hand any URL to your mailcap-resolved viewer (`feh`, `mpv`, `xdg-open`, …) with proper terminal suspend/resume
+- **Inbox + Subscription pages** — `u` toggle read/unread, navigate into individual messages
+- **HelpPage** — `?` from any page shows the full keybinding reference
+- **Theme system** — Solarized Dark/Light, Molokai, Papercolor built-in; user themes load from `~/.config/tuir/themes/<name>.cfg`
+- **OAuth flow** — `tuir auth` opens a localhost callback listener on port 65000, captures the code, exchanges it for a refresh token, and persists it. After that, `tuir` automatically uses the real Reddit backend on every launch.
 
 ## Installation
 
-Not yet available — this is a work in progress.
-
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/tuir-rust.git
+git clone https://github.com/magicnight/tuir-rust.git
 cd tuir-rust
 
 # Build
 cargo build --release
 
-# Run
+# Run with the mock backend (no credentials)
 ./target/release/tuir --subreddit rust
+
+# Or authenticate first to use the real Reddit API
+./target/release/tuir auth
 ```
+
+> Pre-built binaries via `cargo dist` are tracked under M13 in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Configuration
 
@@ -124,16 +143,43 @@ Default config locations:
 
 ```ini
 [tuir]
-subreddit = front          ; Default subreddit on startup
-enable_media = False       ; Open external links via mailcap
-ascii = False              ; ASCII-only mode
-monochrome = False          ; Disable colors
-persistent = True          ; Store OAuth token between sessions
-history_size = 200         ; Max history entries
+subreddit       = front                       ; Default subreddit on startup
+theme           = solarized-dark              ; Built-in or ~/.config/tuir/themes/<name>.cfg
+enable_media    = false                       ; Open external links via mailcap
+media_style     = auto                        ; auto | retro | off  (M9)
+ascii           = false                       ; ASCII-only mode
+monochrome      = false                       ; Disable colors
+persistent      = true                        ; Store OAuth token between sessions
+history_size    = 200                         ; Max history entries
 
-oauth_client_id = your_client_id
+; OAuth (Reddit installed-app flow)
+oauth_client_id     = your_client_id_here
+oauth_redirect_uri  = http://127.0.0.1:65000/
 oauth_redirect_port = 65000
+oauth_scope         = identity,read,vote,mysubreddits,privatemessages,subscribe
 ```
+
+### `media_style` cheatsheet
+
+| Value | Behavior |
+|---|---|
+| `auto` *(default)* | Probe the terminal for the best image protocol (kitty / iTerm2 / Sixel). Falls back to half-blocks. |
+| `retro` | **Force** Unicode half-block rendering even on capable terminals. The deliberate browsh / 90s-screencap aesthetic. |
+| `off` | Skip inline rendering entirely; the media page just shows the URL. Press `o` to open externally. |
+
+### Mailcap
+
+External viewer dispatch is RFC 1524 mailcap-compatible. Drop entries into `~/.config/tuir/mailcap` (highest priority), `~/.mailcap`, or `/etc/mailcap`:
+
+```
+# ~/.config/tuir/mailcap
+image/*; feh %s
+video/*; mpv %s
+text/html; firefox %s
+*/*; xdg-open %s
+```
+
+Wildcards (`image/*`) and the universal catch-all (`*/*`) are honored, in that priority order.
 
 ## Themes
 
@@ -148,17 +194,21 @@ Place custom themes in `~/.config/tuir/themes/` as `.cfg` files.
 
 ## Development Status
 
-| Milestone | Status |
-|-----------|--------|
-| M0 — Scaffold | ✅ Complete |
-| M1 — Config + Themes | ✅ Complete |
-| M2 — Reddit API + OAuth | ✅ Complete |
-| M3 — Core TUI | 🚧 In Progress |
-| M4 — Comments + Voting | 🔜 Next |
-| M5 — Inbox + Subscriptions | 🔜 Next |
-| M6 — Mailcap + Media | 🔜 Next |
-| M7 — Post/Comment | 🔜 Future |
-| M8 — Polish + Release | 🔜 Future |
+| Milestone | Status | Highlights |
+|-----------|--------|------------|
+| M0 — Scaffold | ✅ | Three-crate workspace, cargo build / test / clippy clean |
+| M1 — Config + Themes | ✅ | INI parser, four built-in themes, user theme override |
+| M2 — Reddit API + OAuth skeleton | ✅ | `RedditApi` trait, mock + real client, wiremock-tested OAuth |
+| M3 — Core TUI + Subreddit page | ✅ | ratatui event loop, page stack, navigation, voting |
+| M4 — Submission + comment tree | ✅ | Recursive flatten, collapse, HTML body rendering, sort 1-5 |
+| M5 — Inbox / Subscription / Message | ✅ | All three pages with mark-read, navigation, message viewer |
+| M6 — Theme & visual consistency | ✅ | Every page reads from `Arc<AppTheme>`; unified header anchor |
+| M7 — OAuth full flow | ✅ | `tuir auth` runs the localhost callback listener and stores the token |
+| M8 — Sort / Goto / Help / HTML | ✅ | `1-5` sort, `/` goto prompt, `?` global help, content renderer |
+| **M9 — Inline media preview** | ✅ | image+ratatui-image inline render, `media_style = retro`, mailcap external viewer |
+| M10+ — Search / `load more` / Gallery / Posting / Release | 🔜 | See [docs/ROADMAP.md §9](docs/ROADMAP.md) for the full backlog |
+
+**Tests:** 116 unit/integration tests across the workspace, all green. `cargo clippy --all-targets -- -D warnings` is enforced.
 
 ## Contributing
 

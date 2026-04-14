@@ -172,3 +172,72 @@ tuir-rust/
 - 将本计划文件复制为仓库内 `docs/ROADMAP.md` 持续跟踪
 
 不在本计划范围内（后续独立提案）：Web/Mastodon 桥接、移动端、插件系统、AI 摘要集成。
+
+---
+
+## 8. 当前进度（live）
+
+最后更新：在 `feat(media): mailcap external viewer with terminal suspend/resume (M9.4)` commit 之后。
+
+| 里程碑 | 状态 | 关键 commit |
+|---|---|---|
+| M0 — 脚手架 | ✅ | `2872577` chore: init tuir-rust workspace |
+| M1 — 配置 + 主题 | ✅ | `2c865f2` feat: implement config and theme loading (M1) |
+| M2 — Reddit API + OAuth 骨架 | ✅ | `89a97bc` feat: implement Reddit API client and mock (M2) |
+| M3 — 核心 TUI + Subreddit 页 | ✅ | `4c67eb3` feat: implement CLI with ASCII banner and clap subcommands (M3) |
+| M4 — Submission/评论树 + 投票 | ✅ | `474b543` feat: implement SubredditPage with voting and navigation (M4) + `0c4265d` 评论树递归修复 |
+| M5 — Inbox / Subscription / Message | ✅ | `4c3a644` feat: implement InboxPage and SubscriptionPage (M6) + `bc41428` MessagePage |
+| M6 — 主题/视觉一致化 | ✅ | `4e32d22` 主题接入 SubredditPage、`98ca493` 全页面迁移、`77e4116` header 锚点统一 |
+| M7 — OAuth token 全流程 | ✅ | `de5dac4` token 交换 + 持久化、`d0fb0a0` tiny_http 回调监听器 |
+| M8 — Sort/Goto/Help/HTML 渲染 | ✅ | `5d9f084` 1-5 sort、`8c04a68` `/` goto、`f9310c2` HelpPage、`8ac7933` content 渲染 |
+| **M9 — 媒体预览** | ✅ | `125a01a` 识别+config、`5068b4c` MediaPage 骨架、`99d8155` 内嵌 image 渲染、`4621966` mailcap 外部 viewer |
+
+`tuir auth` + `~/.config/tuir/tuir.cfg` 配 `oauth_client_id` 即可登录真实 Reddit；未登录时所有页面 fallback 到 `MockRedditClient`。
+
+---
+
+## 9. 后续方向（M10+ 候选，未排序）
+
+按价值 × 工程量分组的下一波候选项。每条都是独立可单独接的小 feature，不互相依赖。
+
+### 🟢 小（半天内可完成）
+
+- **Comment 深度颜色走主题** — `format_comment_line` 里的 `Yellow/Green/Cyan/Magenta` 4 段循环还硬编码，给 `AppTheme` 加 `comment_depth: [Style; 4]`，与现有 author/muted/upvote 等保持同一注入路径。
+- **`auth_output` 瘦身** — cleanup #1 漏掉的，那一段还是连串 `lines.push(format!(...))`，改成结构化 builder 或 raw string。
+- **`m` 键 mark all read** — Inbox 页的批量已读，调一次 `client.mark_read(name)` 循环。
+- **`s` 键 save submission** — `/api/save` + `/api/unsave`，对应 Submission 的星标。
+- **GIF 动画帧循环** — `image` crate 的 `AnimationDecoder` 已就绪，MediaPage 现在只取第一帧；改成 stateful 帧循环 + tick。
+
+### 🟡 中（1-2 个 commit）
+
+- **`/u/<username>` 用户 profile 页** — 原 tuir 经典页面：列出某用户的 submissions + comments，按 `u` 在 SubmissionPage 上触发，新增 `UserPage` 页面 + `RedditApi::user_overview(name)` trait 方法。
+- **异步媒体下载 + spinner** — 当前 `MediaPage::ensure_loaded` 是 block_on，UI 冻结到下载完成。改成后台 tokio task + 一个 spinner tick 状态机；同时是后续所有"长操作"页面的范本。
+- **Submission `r` 回复 / `e` 编辑 / `d` 删除** — M7 发帖路径。需要 `$EDITOR` 集成（写临时 markdown 文件 → 等编辑器退出 → 提交到 `/api/comment`）+ terminal suspend/resume（M9.4 已经做完）。
+- **Multi-account 切换** — `tuir auth --user alice` 已支持，但 token 都写到同一个 `refresh-token` 文件。改成 `<data_dir>/tokens/<user>.json`，加个 `--account` CLI flag。
+
+### 🔴 大（独立 milestone）
+
+- **M10 — 搜索** — `/r/<sub>/search?q=…`、front-page 搜索、subreddit 搜索（不只是 goto，是真正的全文搜索结果列表）。需要新页面 + `RedditApi::search()` trait 方法 + 输入流水线复用 SubredditPage 的 goto prompt 模式。
+- **M11 — 真实的 comment "load more"** — 当前评论树里的 `MoreComments` 节点显示为 `[+] Load more comments` 但按 Enter 不会展开。需要 `/api/morechildren` 端点 + 把返回的子树拼回到 flatten_tree 的对应位置。
+- **M12 — Gallery 多图渲染** — Reddit gallery posts 是多张图片，`MediaKind::Gallery` 当前只能 mailcap 外开。inline 路径需要解析 `gallery_data` + `media_metadata` 字段、把每张图独立 download_to_cache、用一个左右翻页 widget 串起来。
+- **M13 — 性能与发布** — `cargo dist` 的 release 二进制（macOS arm64/x86_64、Linux x86_64/arm64）、启动时间 < 50ms 验证、CI matrix。
+- **M14 — Scrolling 评论 viewer** — 当前评论列表是单行截断，按 Enter 进入"展开评论 viewer"显示完整 markdown 渲染（复用 `content::render_plain_string` 的输出）。
+
+### 📌 长期 / 超出本仓库范围
+
+- 同步用户的 multireddit / 自定义 feeds
+- Imgur / Reddit OAuth scope 扩展（gold / modlog / wiki edit）
+- TUI 内嵌 markdown 编辑器（替代 `$EDITOR` shell out）
+- AI 摘要 / 翻译集成（独立的 sidecar 进程，不内嵌依赖）
+
+---
+
+## 10. 决策日志
+
+| 日期（提交时间） | 决策 | 替代方案与理由 |
+|---|---|---|
+| 2026-04-14 a579ee9 | `RedditApi` trait 抽象，pages 持 `Arc<dyn RedditApi>` | 让 mock/真实 client 在运行时切换；不为每个 page 写两份代码 |
+| 2026-04-14 4e32d22 | 主题用 `Arc<AppTheme>` 而非 thread-local | 显式注入比隐式全局更可测；与现有 `Arc<dyn RedditApi>` 注入路径一致 |
+| 2026-04-14 99d8155 | MediaPage 同步阻塞下载 | 与现有所有 `load_sync()` 模式一致；引入 spinner 是独立 milestone（异步媒体下载） |
+| 2026-04-14 3e81854 | `ratatui-image` 关掉 `chafa-dyn` default feature | 保住单二进制分发；牺牲 chafa 后端的少量额外终端兼容性 |
+| 2026-04-14 4621966 | mailcap 命令通过 `sh -c` 启动 | 让用户的 `feh %s args` 之类组合命令直接生效；URL 已 shell-quoted |
