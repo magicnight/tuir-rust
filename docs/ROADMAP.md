@@ -177,7 +177,7 @@ tuir-rust/
 
 ## 8. 当前进度（live）
 
-最后更新：在 `feat(media): mailcap external viewer with terminal suspend/resume (M9.4)` commit 之后。
+最后更新：在 `feat(media): async download + spinner via worker thread` (`10c6610`) commit 之后。M9 相关的三项后续（GIF 帧循环、主题化评论深度色、异步下载范式）已随主干 M10+ 候选项并入。
 
 | 里程碑 | 状态 | 关键 commit |
 |---|---|---|
@@ -202,16 +202,16 @@ tuir-rust/
 
 ### 🟢 小（半天内可完成）
 
-- **Comment 深度颜色走主题** — `format_comment_line` 里的 `Yellow/Green/Cyan/Magenta` 4 段循环还硬编码，给 `AppTheme` 加 `comment_depth: [Style; 4]`，与现有 author/muted/upvote 等保持同一注入路径。
+- ✅ **Comment 深度颜色走主题** — `b978b96` feat(theme): route comment depth colors through AppTheme（`CursorBar1..4` 注入）
 - **`auth_output` 瘦身** — cleanup #1 漏掉的，那一段还是连串 `lines.push(format!(...))`，改成结构化 builder 或 raw string。
 - **`m` 键 mark all read** — Inbox 页的批量已读，调一次 `client.mark_read(name)` 循环。
 - **`s` 键 save submission** — `/api/save` + `/api/unsave`，对应 Submission 的星标。
-- **GIF 动画帧循环** — `image` crate 的 `AnimationDecoder` 已就绪，MediaPage 现在只取第一帧；改成 stateful 帧循环 + tick。
+- ✅ **GIF 动画帧循环** — `0c66e70` feat(media): animated GIF frame loop with Page::tick hook
 
 ### 🟡 中（1-2 个 commit）
 
 - **`/u/<username>` 用户 profile 页** — 原 tuir 经典页面：列出某用户的 submissions + comments，按 `u` 在 SubmissionPage 上触发，新增 `UserPage` 页面 + `RedditApi::user_overview(name)` trait 方法。
-- **异步媒体下载 + spinner** — 当前 `MediaPage::ensure_loaded` 是 block_on，UI 冻结到下载完成。改成后台 tokio task + 一个 spinner tick 状态机；同时是后续所有"长操作"页面的范本。
+- ✅ **异步媒体下载 + spinner** — `10c6610` feat(media): async download + spinner via worker thread（确立 `Page::tick` + 后台 worker + `mpsc::Receiver` 范式，后续所有长操作页面共用）
 - **Submission `r` 回复 / `e` 编辑 / `d` 删除** — M7 发帖路径。需要 `$EDITOR` 集成（写临时 markdown 文件 → 等编辑器退出 → 提交到 `/api/comment`）+ terminal suspend/resume（M9.4 已经做完）。
 - **Multi-account 切换** — `tuir auth --user alice` 已支持，但 token 都写到同一个 `refresh-token` 文件。改成 `<data_dir>/tokens/<user>.json`，加个 `--account` CLI flag。
 
@@ -241,3 +241,5 @@ tuir-rust/
 | 2026-04-14 99d8155 | MediaPage 同步阻塞下载 | 与现有所有 `load_sync()` 模式一致；引入 spinner 是独立 milestone（异步媒体下载） |
 | 2026-04-14 3e81854 | `ratatui-image` 关掉 `chafa-dyn` default feature | 保住单二进制分发；牺牲 chafa 后端的少量额外终端兼容性 |
 | 2026-04-14 4621966 | mailcap 命令通过 `sh -c` 启动 | 让用户的 `feh %s args` 之类组合命令直接生效；URL 已 shell-quoted |
+| 2026-04-15 0c66e70 | `Page::tick()` 默认 no-op + CLI 每帧调用 | 不想把时间驱动逻辑散落进 render；MediaPage 的 GIF 帧推进是第一个用户，后续 spinner/轮询都复用同一入口 |
+| 2026-04-15 10c6610 | 媒体下载走独立 `std::thread` + 线程内单线程 `tokio` runtime，不引入全局 runtime | 单次下载不值得给整个 TUI 背一个长生命周期 runtime；`mpsc::Receiver` + `try_recv` 在 `tick()` 里消费即可，页面切走时 receiver 被 drop，worker 发送静默失败 |
