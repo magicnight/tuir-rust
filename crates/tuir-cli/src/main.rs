@@ -688,13 +688,14 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
             next_page.set_theme(Arc::clone(&page.theme));
             next_page.set_style(config.general.media_style);
 
-            // Kick off the download + decode pipeline immediately so the
-            // first frame the user sees is either a rendered image or a
-            // useful error — not a "loading…" placeholder that never
-            // refreshes (the TUI has no background-task loop yet).
+            // Fire the download + decode pipeline off to a background
+            // worker thread so the TUI stays responsive. The page
+            // enters `Downloading` state immediately and renders a
+            // spinner; `tick()` polls the channel every event-loop
+            // iteration and transitions once the worker posts.
             let http = reqwest::Client::new();
             let cache_dir = Config::media_cache_dir();
-            next_page.ensure_loaded(&http, &cache_dir);
+            next_page.start_download(&http, &cache_dir);
 
             Some(AppPage::Media(next_page))
         }

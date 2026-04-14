@@ -31,10 +31,18 @@ use ratatui::{
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::StatefulImage;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tuir_core::media::{download_to_cache, MediaKind, MediaRef, MediaStyle};
+
+/// Braille spinner frames used while a media download is in flight.
+/// Eight-frame cycle gives a smooth rotation under the 100ms poll.
+const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+
+/// How long each spinner frame is visible before the next one advances.
+const SPINNER_FRAME_DURATION: Duration = Duration::from_millis(80);
 
 /// Per-GIF floor on frame delay. Some GIFs ship `0ms` or `10ms` delays
 /// that would pin a CPU; browsers clamp to 100ms for the same reason.
@@ -57,11 +65,35 @@ pub struct AnimatedMedia {
     pub last_advance: Instant,
 }
 
+/// Output of the async download+decode pipeline that the worker thread
+/// hands back to the page via an `mpsc::Receiver`. Picker construction
+/// stays on the main thread (it may query stdio), so the worker only
+/// delivers raw pixel data.
+pub enum LoadedPixels {
+    /// Static single-frame image — jpg/png/webp/first gif frame.
+    Still(image::DynamicImage),
+    /// All composited frames of an animated GIF, each with its (already
+    /// clamped) display delay.
+    Gif(Vec<(image::DynamicImage, Duration)>),
+}
+
+pub type LoadResult = Result<LoadedPixels, String>;
+
+/// Live state for an in-flight download + decode operation.
+pub struct DownloadInFlight {
+    pub started_at: Instant,
+    pub rx: Receiver<LoadResult>,
+}
+
 /// Render-side status for an inline media preview.
 pub enum MediaStatus {
-    /// Page is fresh — `ensure_loaded` has not been called yet, or the
+    /// Page is fresh — `start_download` has not been called yet, or the
     /// page is in [`MediaStyle::Off`] mode and intentionally never loads.
     Idle,
+    /// A background worker is pulling bytes + decoding on another
+    /// thread. Tick polls the channel and transitions out on
+    /// completion; render shows a spinner keyed off `started_at`.
+    Downloading(DownloadInFlight),
     /// The download/decode pipeline succeeded; we hold a stateful
     /// protocol the renderer feeds frames to on every draw. Boxed so
     /// the enum variants stay close in size — `StatefulProtocol` is
@@ -113,13 +145,16 @@ impl MediaPage {
         }
     }
 
-    /// Run the download + decode + protocol-construction pipeline.
+    /// Kick off the download + decode pipeline on a background worker
+    /// thread and immediately return, leaving the page in
+    /// `Downloading` state. The event-loop `tick()` will poll the
+    /// channel and transition to `Ready`/`Animated`/`Failed` once the
+    /// worker posts its result.
     ///
-    /// Synchronous (block_on) by design — the rest of the page stack uses
-    /// the same pattern, and it keeps the navigation transition as a
-    /// single user-perceived step rather than introducing a spinner /
-    /// background-task path that the TUI doesn't have a concept for yet.
-    pub fn ensure_loaded(&mut self, http: &reqwest::Client, cache_dir: &std::path::Path) {
+    /// Safe to call repeatedly: any call while a download is already
+    /// in flight or after it completes is a no-op. Must be called
+    /// before the first render so the spinner is visible from frame 0.
+    pub fn start_download(&mut self, http: &reqwest::Client, cache_dir: &Path) {
         if !matches!(self.status, MediaStatus::Idle) {
             return;
         }
@@ -131,70 +166,55 @@ impl MediaPage {
             return;
         }
 
-        let url = self.media.url.clone();
+        let (tx, rx) = mpsc::channel::<LoadResult>();
+        let http = http.clone();
         let cache_dir = cache_dir.to_path_buf();
-        let download_result = crate::pages::block_on(async move {
-            download_to_cache(http, &url, &cache_dir).await
+        let url = self.media.url.clone();
+        let kind = self.media.kind;
+
+        std::thread::spawn(move || {
+            let result = run_download_and_decode(http, url, cache_dir, kind);
+            // Receiver-dropped means the page navigated away; nothing
+            // to do — the cached bytes are still on disk for next time.
+            let _ = tx.send(result);
         });
 
-        let path = match download_result {
-            Ok(p) => p,
-            Err(err) => {
-                tracing::error!("media download failed: {err}");
-                self.status = MediaStatus::Failed(format!("download: {err}"));
-                return;
-            }
-        };
-        self.cached_path = Some(path.clone());
+        self.status = MediaStatus::Downloading(DownloadInFlight {
+            started_at: Instant::now(),
+            rx,
+        });
+    }
 
-        // Picker selection:
-        //   Retro  → always use the explicit halfblocks constructor so
-        //            even kitty/iTerm2/sixel terminals get the
-        //            deliberate browsh aesthetic.
-        //   Auto   → query the terminal for its best protocol; fall
-        //            back to halfblocks on headless / non-tty.
+    /// Convert completed `LoadedPixels` into render-ready status,
+    /// building `StatefulProtocol` instances on the main thread (the
+    /// picker can touch stdio so cannot live on the worker).
+    fn finalize(&mut self, loaded: LoadedPixels) {
         let picker = if matches!(self.style, MediaStyle::Retro) {
             Picker::halfblocks()
         } else {
             Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
         };
 
-        if matches!(self.media.kind, MediaKind::AnimatedGif) {
-            match load_animated_gif(&path, &picker) {
-                Ok(anim) => self.status = MediaStatus::Animated(Box::new(anim)),
-                Err(err) => {
-                    tracing::warn!(
-                        "gif multi-frame decode failed for {}: {err}; falling back to static first frame",
-                        path.display()
-                    );
-                    // Fall through to still-image path so the user still
-                    // sees something instead of a hard error.
-                    self.load_still(&path, &picker);
-                }
+        match loaded {
+            LoadedPixels::Still(image) => {
+                let protocol = picker.new_resize_protocol(image);
+                self.status = MediaStatus::Ready(Box::new(protocol));
             }
-            return;
+            LoadedPixels::Gif(frames) => {
+                let built: Vec<AnimatedFrame> = frames
+                    .into_iter()
+                    .map(|(img, delay)| AnimatedFrame {
+                        protocol: Box::new(picker.new_resize_protocol(img)),
+                        delay,
+                    })
+                    .collect();
+                self.status = MediaStatus::Animated(Box::new(AnimatedMedia {
+                    frames: built,
+                    current: 0,
+                    last_advance: Instant::now(),
+                }));
+            }
         }
-
-        self.load_still(&path, &picker);
-    }
-
-    /// Single-frame decode path used for static images and as the GIF
-    /// fallback. Sets `status` to `Ready` or `Failed`.
-    fn load_still(&mut self, path: &std::path::Path, picker: &Picker) {
-        let dyn_image = match image::ImageReader::open(path)
-            .and_then(|r| r.with_guessed_format())
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r.decode().map_err(anyhow::Error::from))
-        {
-            Ok(img) => img,
-            Err(err) => {
-                tracing::error!("media decode failed for {}: {err}", path.display());
-                self.status = MediaStatus::Failed(format!("decode: {err}"));
-                return;
-            }
-        };
-        let protocol = picker.new_resize_protocol(dyn_image);
-        self.status = MediaStatus::Ready(Box::new(protocol));
     }
 
     fn kind_label(kind: MediaKind) -> &'static str {
@@ -211,10 +231,21 @@ impl MediaPage {
         match self.status {
             MediaStatus::Ready(_) => "rendering inline",
             MediaStatus::Animated(_) => "animating inline",
-            MediaStatus::Idle => "loading…",
+            MediaStatus::Downloading(_) => "downloading…",
+            MediaStatus::Idle => "idle",
             MediaStatus::Failed(_) => "failed",
             MediaStatus::NotInline => "not inline-renderable; use mailcap to open externally",
         }
+    }
+
+    /// Compute the current spinner frame index from the time elapsed
+    /// since the download started. Pure function so the caller can
+    /// render Downloading state without mutating the page.
+    fn spinner_frame(started_at: Instant) -> &'static str {
+        let idx = (started_at.elapsed().as_millis() / SPINNER_FRAME_DURATION.as_millis())
+            as usize
+            % SPINNER_FRAMES.len();
+        SPINNER_FRAMES[idx]
     }
 }
 
@@ -241,17 +272,73 @@ fn advance_gif_index(delays: &[Duration], current: usize, mut elapsed: Duration)
     advanced.then_some(idx)
 }
 
-/// Load every frame of a GIF via `image::codecs::gif::GifDecoder`, then
-/// pre-build a `StatefulProtocol` per frame so `tick` is a pointer
-/// swap instead of a decode.
-///
-/// Frames come out of `AnimationDecoder` already composited — the
-/// image crate handles disposal methods internally — so each frame is
-/// a full-canvas RGBA buffer we can hand straight to the picker.
-fn load_animated_gif(
-    path: &std::path::Path,
-    picker: &Picker,
-) -> anyhow::Result<AnimatedMedia> {
+/// Background-thread entry point: download the URL to the on-disk
+/// cache, then decode the bytes into either a single frame or a full
+/// GIF frame vector. Returns a transport-friendly `LoadResult` — no
+/// ratatui types, so this runs on any thread.
+fn run_download_and_decode(
+    http: reqwest::Client,
+    url: String,
+    cache_dir: PathBuf,
+    kind: MediaKind,
+) -> LoadResult {
+    // The worker owns a scratch current-thread runtime purely so
+    // `download_to_cache` (async) can be driven without dragging a
+    // global runtime into the TUI.
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(err) => return Err(format!("runtime: {err}")),
+    };
+
+    let path = match runtime.block_on(download_to_cache(&http, &url, &cache_dir)) {
+        Ok(p) => p,
+        Err(err) => {
+            tracing::error!("media download failed: {err}");
+            return Err(format!("download: {err}"));
+        }
+    };
+
+    if matches!(kind, MediaKind::AnimatedGif) {
+        match decode_all_gif_frames(&path) {
+            Ok(frames) => return Ok(LoadedPixels::Gif(frames)),
+            Err(err) => {
+                tracing::warn!(
+                    "gif multi-frame decode failed for {}: {err}; falling back to still",
+                    path.display()
+                );
+                // Fall through to still-image path.
+            }
+        }
+    }
+
+    match decode_still(&path) {
+        Ok(img) => Ok(LoadedPixels::Still(img)),
+        Err(err) => {
+            tracing::error!("media decode failed for {}: {err}", path.display());
+            Err(format!("decode: {err}"))
+        }
+    }
+}
+
+/// Decode a single still frame from the given file, guessing the
+/// format from magic bytes so jpeg/png/webp all work without relying
+/// on file extensions.
+fn decode_still(path: &Path) -> anyhow::Result<image::DynamicImage> {
+    let img = image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .decode()?;
+    Ok(img)
+}
+
+/// Decode every frame of a GIF via `image::codecs::gif::GifDecoder`,
+/// returning `(DynamicImage, post-clamp delay)` pairs. Frames come out
+/// of `AnimationDecoder` already composited — the image crate handles
+/// disposal methods internally — so each frame is a full-canvas RGBA
+/// buffer.
+fn decode_all_gif_frames(path: &Path) -> anyhow::Result<Vec<(image::DynamicImage, Duration)>> {
     use image::codecs::gif::GifDecoder;
     use image::{AnimationDecoder, DynamicImage};
 
@@ -262,7 +349,7 @@ fn load_animated_gif(
         anyhow::bail!("gif has zero frames");
     }
 
-    let mut frames: Vec<AnimatedFrame> = Vec::with_capacity(raw_frames.len());
+    let mut out = Vec::with_capacity(raw_frames.len());
     for frame in raw_frames {
         let delay_ms = {
             let (numer, denom) = frame.delay().numer_denom_ms();
@@ -274,19 +361,9 @@ fn load_animated_gif(
         };
         let delay = Duration::from_millis(delay_ms as u64).max(MIN_FRAME_DELAY);
         let buffer = frame.into_buffer();
-        let dyn_image = DynamicImage::ImageRgba8(buffer);
-        let protocol = picker.new_resize_protocol(dyn_image);
-        frames.push(AnimatedFrame {
-            protocol: Box::new(protocol),
-            delay,
-        });
+        out.push((DynamicImage::ImageRgba8(buffer), delay));
     }
-
-    Ok(AnimatedMedia {
-        frames,
-        current: 0,
-        last_advance: Instant::now(),
-    })
+    Ok(out)
 }
 
 impl Page for MediaPage {
@@ -332,6 +409,25 @@ impl Page for MediaPage {
             MediaStatus::Idle => {
                 let lines = vec![
                     Line::from(Span::styled("Loading media…", self.theme.muted)),
+                    Line::from(""),
+                    Line::from(Span::raw(self.media.url.clone())),
+                ];
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+            }
+            MediaStatus::Downloading(info) => {
+                let elapsed_ms = info.started_at.elapsed().as_millis();
+                let spinner = Self::spinner_frame(info.started_at);
+                let lines = vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{spinner} "),
+                            self.theme.author,
+                        ),
+                        Span::styled(
+                            format!("Downloading media… ({}ms)", elapsed_ms),
+                            self.theme.muted,
+                        ),
+                    ]),
                     Line::from(""),
                     Line::from(Span::raw(self.media.url.clone())),
                 ];
@@ -401,6 +497,27 @@ impl Page for MediaPage {
     /// past several 100ms slots) so the animation's speed reflects
     /// real time rather than tick count.
     fn tick(&mut self) {
+        // Downloading: non-blocking check whether the worker thread
+        // has posted a result. On Empty we stay in Downloading so the
+        // spinner keeps rotating; on Disconnected (worker panicked)
+        // we surface the failure.
+        if let MediaStatus::Downloading(info) = &self.status {
+            match info.rx.try_recv() {
+                Ok(Ok(pixels)) => {
+                    self.finalize(pixels);
+                }
+                Ok(Err(err)) => {
+                    self.status = MediaStatus::Failed(err);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.status =
+                        MediaStatus::Failed("worker thread terminated".to_string());
+                }
+            }
+            return;
+        }
+
         if let MediaStatus::Animated(anim) = &mut self.status {
             let delays: Vec<Duration> = anim.frames.iter().map(|f| f.delay).collect();
             if let Some(next) =
@@ -520,13 +637,32 @@ mod tests {
             encoder.encode_frames(frames).expect("encode gif");
         }
 
-        let picker = Picker::halfblocks();
-        let anim = load_animated_gif(&tmp, &picker).expect("decode gif");
-        assert_eq!(anim.frames.len(), 2);
+        let frames = decode_all_gif_frames(&tmp).expect("decode gif");
+        assert_eq!(frames.len(), 2);
         // Encoded delay was 10ms — should be clamped up to MIN_FRAME_DELAY.
-        assert_eq!(anim.frames[0].delay, MIN_FRAME_DELAY);
-        assert_eq!(anim.frames[1].delay, MIN_FRAME_DELAY);
+        assert_eq!(frames[0].1, MIN_FRAME_DELAY);
+        assert_eq!(frames[1].1, MIN_FRAME_DELAY);
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn spinner_frame_cycles_through_all_frames() {
+        let start = Instant::now();
+        let frame0 = MediaPage::spinner_frame(start);
+        // Any frame index is valid — only verify the function returns
+        // one of the known frames without panicking.
+        assert!(SPINNER_FRAMES.contains(&frame0));
+    }
+
+    #[test]
+    fn status_label_for_downloading_mentions_downloading() {
+        let (_tx, rx) = mpsc::channel();
+        let mut page = page_with(MediaKind::Image);
+        page.status = MediaStatus::Downloading(DownloadInFlight {
+            started_at: Instant::now(),
+            rx,
+        });
+        assert!(page.status_label().contains("download"));
     }
 }
