@@ -8,12 +8,14 @@ use crossterm::{
 };
 use std::sync::Arc;
 use std::time::Duration;
+use tuir_core::media::detect_media;
 use tuir_core::oauth::StoredToken;
 use tuir_core::reddit::{MockRedditClient, RedditApi, RedditClient};
 use tuir_core::{config::Config, OAuth};
 use tuir_tui::pages::{
-    help::HelpPage, inbox::InboxPage, message::MessagePage, submission::SubmissionPage,
-    subreddit::SubredditPage, subscription::SubscriptionPage, Page, PageAction, PageKind,
+    help::HelpPage, inbox::InboxPage, media::MediaPage, message::MessagePage,
+    submission::SubmissionPage, subreddit::SubredditPage, subscription::SubscriptionPage, Page,
+    PageAction, PageKind,
 };
 use tuir_tui::terminal::{init, restore, TerminalType};
 use tuir_tui::theme::AppTheme;
@@ -155,6 +157,7 @@ enum AppPage {
     Inbox(InboxPage),
     Subscription(SubscriptionPage),
     Help(HelpPage),
+    Media(MediaPage),
 }
 
 impl AppPage {
@@ -166,6 +169,7 @@ impl AppPage {
             Self::Inbox(page) => page.handle_key(key),
             Self::Subscription(page) => page.handle_key(key),
             Self::Help(page) => page.handle_key(key),
+            Self::Media(page) => page.handle_key(key),
         }
     }
 
@@ -182,6 +186,7 @@ impl AppPage {
             Self::Inbox(p) => Arc::clone(&p.theme),
             Self::Subscription(p) => Arc::clone(&p.theme),
             Self::Help(p) => Arc::clone(&p.theme),
+            Self::Media(p) => Arc::clone(&p.theme),
         }
     }
 }
@@ -560,6 +565,7 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
                 AppPage::Inbox(page) => page.render(f),
                 AppPage::Subscription(page) => page.render(f),
                 AppPage::Help(page) => page.render(f),
+                AppPage::Media(page) => page.render(f),
             }
         })?;
 
@@ -617,6 +623,16 @@ fn is_help_shortcut(key: &crossterm::event::KeyEvent) -> bool {
 
 fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage> {
     match (current_page, kind) {
+        (AppPage::Submission(page), PageKind::Media) => {
+            // Re-classify the URL each time `i` is pressed so a future
+            // edit-flair flow that mutates submission.url stays correct.
+            let media = detect_media(&page.submission.url)?;
+            let config = Config::load().unwrap_or_default();
+            let mut next_page = MediaPage::new(media);
+            next_page.set_theme(Arc::clone(&page.theme));
+            next_page.set_style(config.general.media_style);
+            Some(AppPage::Media(next_page))
+        }
         (AppPage::Subreddit(page), PageKind::Submission) => {
             let idx = page.list_state.selected()?;
             let submission = page.submissions.get(idx)?.clone();

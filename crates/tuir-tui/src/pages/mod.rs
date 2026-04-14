@@ -2,6 +2,7 @@
 
 pub mod help;
 pub mod inbox;
+pub mod media;
 pub mod message;
 pub mod submission;
 pub mod subreddit;
@@ -32,6 +33,7 @@ pub enum PageKind {
     Inbox,
     Subscription,
     Help,
+    Media,
 }
 
 /// Trait for all application pages

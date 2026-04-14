@@ -406,7 +406,8 @@ impl crate::pages::Page for SubmissionPage {
         }
 
         // ── Footer ───────────────────────────────────────────────
-        let footer_text = " j/k:Nav | c:Collapse | a/z:Vote | r:Refresh | ?:Help | q:Back ";
+        let footer_text =
+            " j/k:Nav | c:Collapse | i:Media | a/z:Vote | r:Refresh | ?:Help | q:Back ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)
@@ -427,6 +428,15 @@ impl crate::pages::Page for SubmissionPage {
         if key.code == KeyCode::Char('c') {
             self.toggle_collapse();
             return PageAction::None;
+        }
+
+        // 'i' opens the media preview page when the submission URL points
+        // at something the inline renderer can plausibly handle. We let
+        // the build_switched_page handler in main.rs do the actual
+        // classification so MediaPage construction stays out of the
+        // borrow-checked render path.
+        if key.code == KeyCode::Char('i') {
+            return PageAction::Switch(crate::pages::PageKind::Media);
         }
 
         if let Some(action) = KeyAction::from_key(key.code, key.modifiers) {
