@@ -9,8 +9,8 @@ use crossterm::{
 use std::time::Duration;
 use tuir_core::{config::Config, OAuth};
 use tuir_tui::pages::{
-    inbox::InboxPage, message::MessagePage, submission::SubmissionPage, subreddit::SubredditPage,
-    subscription::SubscriptionPage, Page, PageAction, PageKind,
+    help::HelpPage, inbox::InboxPage, message::MessagePage, submission::SubmissionPage,
+    subreddit::SubredditPage, subscription::SubscriptionPage, Page, PageAction, PageKind,
 };
 use tuir_tui::terminal::{init, restore, TerminalType};
 
@@ -190,6 +190,7 @@ enum AppPage {
     Message(MessagePage),
     Inbox(InboxPage),
     Subscription(SubscriptionPage),
+    Help(HelpPage),
 }
 
 impl AppPage {
@@ -200,7 +201,12 @@ impl AppPage {
             Self::Message(page) => page.handle_key(key),
             Self::Inbox(page) => page.handle_key(key),
             Self::Subscription(page) => page.handle_key(key),
+            Self::Help(page) => page.handle_key(key),
         }
+    }
+
+    fn is_help(&self) -> bool {
+        matches!(self, Self::Help(_))
     }
 }
 
@@ -364,6 +370,7 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
                 AppPage::Message(page) => page.render(f),
                 AppPage::Inbox(page) => page.render(f),
                 AppPage::Subscription(page) => page.render(f),
+                AppPage::Help(page) => page.render(f),
             }
         })?;
 
@@ -371,6 +378,10 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
             Ok(true) => {
                 if let Ok(Event::Key(key)) = event::read() {
                     if key.kind == KeyEventKind::Press {
+                        if is_help_shortcut(&key) && !current_page.is_help() {
+                            stack.push(AppPage::Help(HelpPage::new()));
+                            continue;
+                        }
                         let action = current_page.handle_key(key);
                         match action {
                             PageAction::Quit => break,
@@ -397,6 +408,13 @@ fn event_loop(terminal: &mut TerminalType, initial_page: AppPage) -> Result<()> 
     }
 
     Ok(())
+}
+
+fn is_help_shortcut(key: &crossterm::event::KeyEvent) -> bool {
+    matches!(
+        key.code,
+        crossterm::event::KeyCode::Char('?')
+    )
 }
 
 fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage> {

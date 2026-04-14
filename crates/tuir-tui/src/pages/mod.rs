@@ -1,5 +1,6 @@
 //! Page trait and implementations
 
+pub mod help;
 pub mod inbox;
 pub mod message;
 pub mod submission;
