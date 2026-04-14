@@ -46,6 +46,8 @@ pub struct GeneralConfig {
     pub history_size: usize,
     /// Open external links via mailcap
     pub enable_media: bool,
+    /// How media previews render in the TUI (auto / retro / off).
+    pub media_style: crate::media::MediaStyle,
     /// Max columns for comments
     pub max_comment_cols: usize,
     /// Max columns for pager
@@ -101,6 +103,7 @@ impl Default for GeneralConfig {
             clear_auth: false,
             history_size: 200,
             enable_media: false,
+            media_style: crate::media::MediaStyle::Auto,
             max_comment_cols: 120,
             max_pager_cols: None,
             hide_username: false,
@@ -218,6 +221,9 @@ impl Config {
             clear_auth: get_bool(ini, section, "clear_auth", false),
             history_size: get_usize(ini, section, "history_size", 200),
             enable_media: get_bool(ini, section, "enable_media", false),
+            media_style: get_opt_str(ini, section, "media_style")
+                .and_then(|s| crate::media::MediaStyle::parse(&s))
+                .unwrap_or_default(),
             max_comment_cols: get_usize(ini, section, "max_comment_cols", 120),
             max_pager_cols: get_opt_usize(ini, section, "max_pager_cols"),
             hide_username: get_bool(ini, section, "hide_username", false),
@@ -394,5 +400,43 @@ history_size = 100
         assert_eq!(config.general.subreddit, "rust");
         assert!(config.general.ascii);
         assert_eq!(config.general.history_size, 100);
+    }
+
+    #[test]
+    fn test_config_parses_media_style_retro() {
+        let ini_content = r#"
+[tuir]
+subreddit = rust
+media_style = retro
+"#;
+        let mut ini = Ini::new();
+        ini.read(ini_content.to_string()).unwrap();
+        let config = Config::parse_ini(&ini).unwrap();
+        assert_eq!(config.general.media_style, crate::media::MediaStyle::Retro);
+    }
+
+    #[test]
+    fn test_config_media_style_defaults_to_auto_when_unspecified() {
+        let ini_content = r#"
+[tuir]
+subreddit = rust
+"#;
+        let mut ini = Ini::new();
+        ini.read(ini_content.to_string()).unwrap();
+        let config = Config::parse_ini(&ini).unwrap();
+        assert_eq!(config.general.media_style, crate::media::MediaStyle::Auto);
+    }
+
+    #[test]
+    fn test_config_media_style_unknown_value_falls_back_to_auto() {
+        let ini_content = r#"
+[tuir]
+subreddit = rust
+media_style = sixel
+"#;
+        let mut ini = Ini::new();
+        ini.read(ini_content.to_string()).unwrap();
+        let config = Config::parse_ini(&ini).unwrap();
+        assert_eq!(config.general.media_style, crate::media::MediaStyle::Auto);
     }
 }
