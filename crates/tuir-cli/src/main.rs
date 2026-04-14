@@ -17,44 +17,49 @@ use tuir_tui::pages::{
 };
 use tuir_tui::terminal::{init, restore, TerminalType};
 
-const HERO_PIXEL_WIDTH: usize = 2;
-const COMPACT_PIXEL_WIDTH: usize = 2;
-const MIN_3D_WIDTH: u16 = 72;
-const HERO_TOP_ROWS: [&str; 5] = [
-    "########  ##  ##  ####  ###### ",
-    "   ##     ##  ##   ##   ##   ##",
-    "   ##     ##  ##   ##   #####  ",
-    "   ##     ##  ##   ##   ## ##  ",
-    "   ##      ####   ####  ##  ## ",
+const MIN_HERO_WIDTH: u16 = 72;
+
+/// Hero banner: ANSI Shadow TUIR-RUST (6 rows × 69 cols).
+const HERO_ROWS: [&str; 6] = [
+    "████████╗██╗   ██╗██╗██████╗       ██████╗ ██╗   ██╗███████╗████████╗",
+    "╚══██╔══╝██║   ██║██║██╔══██╗      ██╔══██╗██║   ██║██╔════╝╚══██╔══╝",
+    "   ██║   ██║   ██║██║██████╔╝█████╗██████╔╝██║   ██║███████╗   ██║   ",
+    "   ██║   ██║   ██║██║██╔══██╗╚════╝██╔══██╗██║   ██║╚════██║   ██║   ",
+    "   ██║   ╚██████╔╝██║██║  ██║      ██║  ██║╚██████╔╝███████║   ██║   ",
+    "   ╚═╝    ╚═════╝ ╚═╝╚═╝  ╚═╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ",
 ];
 
-const HERO_BOTTOM_ROWS: [&str; 5] = [
-    "######   ##  ##   ####   ########",
-    "##   ##  ##  ##  ##         ##   ",
-    "######   ##  ##   ####      ##   ",
-    "## ##    ##  ##      ##     ##   ",
-    "##  ##    ####    ####      ##   ",
+/// Rust-gradient palette applied row-by-row to the hero banner.
+const HERO_COLORS: [u8; 6] = [220, 214, 208, 202, 196, 160];
+
+/// Compact fallback banner: Standard figlet TUIR-RUST (5 rows × 52 cols).
+const COMPACT_ROWS: [&str; 5] = [
+    r" _____ _   _ ___ ____        ____  _   _ ____ _____ ",
+    r"|_   _| | | |_ _|  _ \ _____|  _ \| | | / ___|_   _|",
+    r"  | | | | | || || |_) |_____| |_) | | | \___ \ | |  ",
+    r"  | | | |_| || ||  _ <      |  _ <| |_| |___) || |  ",
+    r"  |_|  \___/|___|_| \_\     |_| \_\\___/|____/ |_|  ",
 ];
 
-const COMPACT_TOP_ROWS: [&str; 3] = [
-    "##### ## ## ### #### ",
-    "  #   ## ##  #  ## ##",
-    "  #    ###  ### ## ##",
-];
-
-const COMPACT_BOTTOM_ROWS: [&str; 3] = [
-    "#### ## ## ### ####",
-    "## # ## ##  ##  ## ",
-    "## ## ###  ###  ## ",
-];
+const COMPACT_COLORS: [u8; 5] = [220, 208, 202, 196, 160];
 
 fn banner_for_width(width: Option<u16>) -> String {
     match width {
-        Some(width) if width >= MIN_3D_WIDTH => {
-            render_banner(&HERO_TOP_ROWS, &HERO_BOTTOM_ROWS, HERO_PIXEL_WIDTH)
-        }
-        _ => render_banner(&COMPACT_TOP_ROWS, &COMPACT_BOTTOM_ROWS, COMPACT_PIXEL_WIDTH),
+        Some(width) if width >= MIN_HERO_WIDTH => render_banner(&HERO_ROWS, &HERO_COLORS),
+        _ => render_banner(&COMPACT_ROWS, &COMPACT_COLORS),
     }
+}
+
+fn render_banner(rows: &[&str], colors: &[u8]) -> String {
+    let mut banner = String::from("\n");
+    for (row, color) in rows.iter().zip(colors.iter()) {
+        banner.push_str(&format!("\x1b[38;5;{color};1m{row}\x1b[0m\n"));
+    }
+    banner.push('\n');
+    banner.push_str(
+        "\x1b[38;5;208;1m          Terminal UI for Reddit — Rust Rewrite\x1b[0m\n\n",
+    );
+    banner
 }
 
 #[cfg(test)]
@@ -64,67 +69,22 @@ fn longest_visible_line_width(banner: &str) -> usize {
 
 #[cfg(test)]
 fn visible_line_width(line: &str) -> usize {
-    let bytes = line.as_bytes();
-    let mut width = 0;
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'[') {
-            index += 2;
-            while index < bytes.len() && !bytes[index].is_ascii_alphabetic() {
-                index += 1;
-            }
-            if index < bytes.len() {
-                index += 1;
+    let mut width = 0usize;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            while let Some(&c) = chars.peek() {
+                chars.next();
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
             }
             continue;
         }
-
         width += 1;
-        index += 1;
     }
-
     width
-}
-
-fn render_banner(top_rows: &[&str], bottom_rows: &[&str], pixel_width: usize) -> String {
-    let mut banner = String::from("\n");
-    banner.push_str(&render_block_rows(top_rows, 215, 172, pixel_width));
-    banner.push('\n');
-    banner.push_str(&render_block_rows(bottom_rows, 196, 160, pixel_width));
-    banner.push('\n');
-    banner.push_str("\x1b[38;5;220m  Terminal UI for Reddit -- Rust Rewrite\x1b[0m\n\n");
-    banner
-}
-
-fn render_block_rows(rows: &[&str], face_color: u8, shadow_color: u8, pixel_width: usize) -> String {
-    let mut rendered = String::new();
-    for row in rows {
-        rendered.push_str(&render_mask_row(row, face_color, pixel_width, 0));
-        rendered.push('\n');
-        rendered.push_str(&render_mask_row(row, shadow_color, pixel_width, 1));
-        rendered.push('\n');
-    }
-
-    rendered
-}
-
-fn render_mask_row(row: &str, color: u8, pixel_width: usize, indent_cells: usize) -> String {
-    let mut rendered = " ".repeat(indent_cells * pixel_width);
-
-    for cell in row.as_bytes() {
-        if *cell == b'#' {
-            rendered.push_str(&pixel_fill(color, pixel_width));
-        } else {
-            rendered.push_str(&" ".repeat(pixel_width));
-        }
-    }
-
-    rendered
-}
-
-fn pixel_fill(color: u8, pixel_width: usize) -> String {
-    format!("\x1b[38;5;{color}m{}\x1b[0m", "#".repeat(pixel_width))
 }
 
 /// Terminal UI for Reddit
@@ -542,18 +502,18 @@ fn do_list_themes() -> Result<()> {
 mod tests {
     use super::{
         auth_output, banner_for_width, build_switched_page, longest_visible_line_width,
-        render_banner, AppPage, COMPACT_BOTTOM_ROWS, COMPACT_PIXEL_WIDTH, COMPACT_TOP_ROWS,
-        HERO_BOTTOM_ROWS, HERO_PIXEL_WIDTH, HERO_TOP_ROWS, MIN_3D_WIDTH,
+        render_banner, AppPage, COMPACT_COLORS, COMPACT_ROWS, HERO_COLORS, HERO_ROWS,
+        MIN_HERO_WIDTH,
     };
     use tuir_core::{config::Config, reddit::models::Message};
     use tuir_tui::pages::{inbox::InboxPage, message::MessagePage, PageKind};
 
     fn hero_banner() -> String {
-        render_banner(&HERO_TOP_ROWS, &HERO_BOTTOM_ROWS, HERO_PIXEL_WIDTH)
+        render_banner(&HERO_ROWS, &HERO_COLORS)
     }
 
     fn compact_banner() -> String {
-        render_banner(&COMPACT_TOP_ROWS, &COMPACT_BOTTOM_ROWS, COMPACT_PIXEL_WIDTH)
+        render_banner(&COMPACT_ROWS, &COMPACT_COLORS)
     }
 
     #[test]
@@ -563,44 +523,72 @@ mod tests {
 
     #[test]
     fn uses_compact_banner_below_threshold() {
-        assert_eq!(banner_for_width(Some(MIN_3D_WIDTH - 1)), compact_banner());
+        assert_eq!(
+            banner_for_width(Some(MIN_HERO_WIDTH - 1)),
+            compact_banner()
+        );
     }
 
     #[test]
-    fn uses_3d_banner_at_threshold_and_above() {
-        assert_eq!(banner_for_width(Some(MIN_3D_WIDTH)), hero_banner());
-        assert_eq!(banner_for_width(Some(MIN_3D_WIDTH + 20)), hero_banner());
+    fn uses_hero_banner_at_threshold_and_above() {
+        assert_eq!(banner_for_width(Some(MIN_HERO_WIDTH)), hero_banner());
+        assert_eq!(banner_for_width(Some(MIN_HERO_WIDTH + 20)), hero_banner());
     }
 
     #[test]
-    fn hero_banner_contains_branding_and_palette() {
+    fn hero_banner_contains_branding_and_gradient_palette() {
         let banner = hero_banner();
-        assert!(banner.contains("Terminal UI for Reddit -- Rust Rewrite"));
-        assert!(banner.contains("\x1b[38;5;215m##\x1b[0m"));
-        assert!(banner.contains("\x1b[38;5;196m##\x1b[0m"));
+        assert!(banner.contains("Terminal UI for Reddit — Rust Rewrite"));
+        for color in HERO_COLORS {
+            assert!(
+                banner.contains(&format!("\x1b[38;5;{color};1m")),
+                "missing palette entry {color}"
+            );
+        }
     }
 
     #[test]
-    fn hero_banner_uses_visible_foreground_blocks() {
+    fn hero_banner_fully_spells_tuir_rust() {
+        // Sanity check: the ANSI Shadow letters include enough ║/╗/╝ glyphs
+        // across all six rows that we exercise every letter of TUIR-RUST.
         let banner = hero_banner();
-        assert!(!banner.contains("\x1b[48;5;"));
-        assert!(banner.contains("##"));
+        assert!(banner.contains("████████╗"));
+        assert!(banner.contains("██████╔╝"));
+        assert!(banner.contains("╚═════╝"));
+    }
+
+    #[test]
+    fn banner_rows_are_uniform_width() {
+        let hero_width = visible_line_width(HERO_ROWS[0]);
+        for row in HERO_ROWS.iter().skip(1) {
+            assert_eq!(visible_line_width(row), hero_width);
+        }
+        let compact_width = visible_line_width(COMPACT_ROWS[0]);
+        for row in COMPACT_ROWS.iter().skip(1) {
+            assert_eq!(visible_line_width(row), compact_width);
+        }
     }
 
     #[test]
     fn banner_variants_stay_within_expected_width_budgets() {
-        let hero_banner = hero_banner();
-        let compact_banner = compact_banner();
-        assert!(longest_visible_line_width(&hero_banner) >= 68);
-        assert!(longest_visible_line_width(&hero_banner) <= 80);
-        assert!(longest_visible_line_width(&compact_banner) <= 60);
+        let hero = hero_banner();
+        let compact = compact_banner();
+        assert!(longest_visible_line_width(&hero) >= 60);
+        assert!(longest_visible_line_width(&hero) <= 80);
+        assert!(longest_visible_line_width(&compact) >= 45);
+        assert!(longest_visible_line_width(&compact) <= 60);
     }
 
     #[test]
     fn hero_threshold_covers_rendered_width() {
-        let hero_banner = hero_banner();
-        assert!(usize::from(MIN_3D_WIDTH) >= longest_visible_line_width(&hero_banner));
+        let hero = hero_banner();
+        assert!(
+            usize::from(MIN_HERO_WIDTH) >= longest_visible_line_width(&hero),
+            "MIN_HERO_WIDTH must exceed visible hero width"
+        );
     }
+
+    use super::visible_line_width;
 
     #[test]
     fn auth_output_guides_when_client_id_is_missing() {
