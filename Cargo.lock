@@ -3109,12 +3109,15 @@ dependencies = [
  "color-eyre",
  "crossterm",
  "dirs",
+ "reqwest",
+ "tiny_http",
  "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "tuir-core",
  "tuir-tui",
+ "url",
 ]
 
 [[package]]
