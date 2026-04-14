@@ -2,7 +2,7 @@
 //!
 //! Provides fake data that mirrors Reddit's API response structure.
 
-use crate::reddit::api::{RedditApi, SubmissionPayload};
+use crate::reddit::api::{RedditApi, Sort, SubmissionPayload};
 use crate::reddit::models::{Comment, Listing, ListingData, Message, Submission, Subreddit, Thing};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -276,8 +276,21 @@ pub struct MockSubmissionResponse {
 
 #[async_trait]
 impl RedditApi for MockRedditClient {
-    async fn hot(&self, subreddit: Option<&str>, limit: usize) -> Result<Listing<Submission>> {
-        Ok(MockRedditClient::hot(self, subreddit, limit).await)
+    async fn listing(
+        &self,
+        sort: Sort,
+        subreddit: Option<&str>,
+        limit: usize,
+    ) -> Result<Listing<Submission>> {
+        let mut listing = MockRedditClient::hot(self, subreddit, limit).await;
+        // Stamp the sort into the post titles so the UI (and tests) can
+        // observe that switching sort actually went through the trait method
+        // even though the mock returns the same shape regardless.
+        let label = sort.as_str();
+        for child in listing.data.children.iter_mut() {
+            child.data.title = format!("[{label}] {}", child.data.title);
+        }
+        Ok(listing)
     }
 
     async fn submission(&self, id: &str) -> Result<SubmissionPayload> {

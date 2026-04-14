@@ -23,15 +23,23 @@ pub enum SortOrder {
     New,
     Top,
     Controversial,
+    Rising,
 }
 
 impl SortOrder {
     pub fn label(&self) -> &'static str {
+        self.to_core().as_str()
+    }
+
+    /// Map the UI-side sort to the network-side [`tuir_core::reddit::api::Sort`].
+    pub fn to_core(self) -> tuir_core::reddit::api::Sort {
+        use tuir_core::reddit::api::Sort;
         match self {
-            SortOrder::Hot => "hot",
-            SortOrder::New => "new",
-            SortOrder::Top => "top",
-            SortOrder::Controversial => "controversial",
+            SortOrder::Hot => Sort::Hot,
+            SortOrder::New => Sort::New,
+            SortOrder::Top => Sort::Top,
+            SortOrder::Controversial => Sort::Controversial,
+            SortOrder::Rising => Sort::Rising,
         }
     }
 }

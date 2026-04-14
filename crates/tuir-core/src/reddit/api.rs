@@ -11,6 +11,30 @@ pub struct SubmissionPayload {
     pub comments: Vec<Comment>,
 }
 
+/// Listing sort order for subreddit feeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sort {
+    #[default]
+    Hot,
+    New,
+    Top,
+    Controversial,
+    Rising,
+}
+
+impl Sort {
+    /// URL path segment used by Reddit (`/r/<sub>/<segment>`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sort::Hot => "hot",
+            Sort::New => "new",
+            Sort::Top => "top",
+            Sort::Controversial => "controversial",
+            Sort::Rising => "rising",
+        }
+    }
+}
+
 /// Common Reddit API interface consumed by the TUI layer.
 ///
 /// Both [`crate::reddit::MockRedditClient`] and [`crate::reddit::RedditClient`]
@@ -18,7 +42,18 @@ pub struct SubmissionPayload {
 /// mock and real backends at runtime.
 #[async_trait]
 pub trait RedditApi: Send + Sync {
-    async fn hot(&self, subreddit: Option<&str>, limit: usize) -> Result<Listing<Submission>>;
+    /// Fetch a listing of submissions for the given sort order.
+    async fn listing(
+        &self,
+        sort: Sort,
+        subreddit: Option<&str>,
+        limit: usize,
+    ) -> Result<Listing<Submission>>;
+
+    /// Convenience shortcut for [`Sort::Hot`]; trait callers can use either.
+    async fn hot(&self, subreddit: Option<&str>, limit: usize) -> Result<Listing<Submission>> {
+        self.listing(Sort::Hot, subreddit, limit).await
+    }
 
     async fn submission(&self, id: &str) -> Result<SubmissionPayload>;
 

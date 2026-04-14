@@ -3,7 +3,7 @@
 use crate::keymap::KeyAction;
 use crate::widgets::{render_submission_list, SortOrder, VoteState};
 use crate::PageAction;
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::Style,
@@ -60,7 +60,8 @@ impl SubredditPage {
             Some(self.name.as_str())
         };
 
-        let listing = match self.client.hot(sub, 50).await {
+        let sort = self.sort.to_core();
+        let listing = match self.client.listing(sort, sub, 50).await {
             Ok(listing) => listing,
             Err(err) => {
                 tracing::error!("failed to load subreddit listing: {err}");
@@ -160,6 +161,15 @@ impl SubredditPage {
     pub fn refresh(&mut self) {
         self.load_sync();
     }
+
+    /// Switch the active sort order and reload immediately.
+    pub fn set_sort(&mut self, sort: SortOrder) {
+        if self.sort == sort {
+            return;
+        }
+        self.sort = sort;
+        self.load_sync();
+    }
 }
 
 impl crate::pages::Page for SubredditPage {
@@ -210,7 +220,7 @@ impl crate::pages::Page for SubredditPage {
         );
 
         // Footer
-        let footer_text = " ↑/↓ or j/k: Navigate | a: Upvote | z: Downvote | r: Refresh | q: Quit ";
+        let footer_text = " j/k:Nav | 1-5:Sort hot/new/top/contro/rising | a/z:Vote | r:Refresh | q:Quit ";
         let footer = Block::default()
             .title(footer_text)
             .borders(Borders::ALL)
@@ -222,6 +232,21 @@ impl crate::pages::Page for SubredditPage {
 
     fn handle_key(&mut self, key: KeyEvent) -> PageAction {
         use crate::pages::PageAction;
+
+        // Digit shortcuts cycle the sort order (mirrors classic tuir/rtv).
+        if let KeyCode::Char(ch) = key.code {
+            if let Some(sort) = match ch {
+                '1' => Some(SortOrder::Hot),
+                '2' => Some(SortOrder::New),
+                '3' => Some(SortOrder::Top),
+                '4' => Some(SortOrder::Controversial),
+                '5' => Some(SortOrder::Rising),
+                _ => None,
+            } {
+                self.set_sort(sort);
+                return PageAction::None;
+            }
+        }
 
         if let Some(action) = KeyAction::from_key(key.code, key.modifiers) {
             match action {
@@ -274,6 +299,45 @@ mod tests {
         page.refresh();
 
         assert_eq!(page.vote_states.first(), Some(&VoteState::Up));
+    }
+
+    #[test]
+    fn pressing_two_switches_to_new_and_reloads() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        assert_eq!(page.sort, SortOrder::Hot);
+
+        let action =
+            page.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::empty()));
+        assert_eq!(action, PageAction::None);
+        assert_eq!(page.sort, SortOrder::New);
+        // Mock stamps the sort label into each title; verify reload happened.
+        assert!(
+            page.submissions
+                .first()
+                .map(|s| s.title.starts_with("[new]"))
+                .unwrap_or(false),
+            "expected mock submissions to be re-stamped with [new] prefix; got {:?}",
+            page.submissions.first().map(|s| s.title.as_str())
+        );
+    }
+
+    #[test]
+    fn pressing_five_switches_to_rising() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        page.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::empty()));
+        assert_eq!(page.sort, SortOrder::Rising);
+    }
+
+    #[test]
+    fn pressing_same_sort_is_a_noop() {
+        let mut page = SubredditPage::new("rust");
+        page.load_sync();
+        let before = page.submissions.len();
+        page.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()));
+        assert_eq!(page.sort, SortOrder::Hot);
+        assert_eq!(page.submissions.len(), before);
     }
 
     #[test]

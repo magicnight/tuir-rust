@@ -48,6 +48,20 @@ pub async fn top(
     Ok(listing)
 }
 
+/// Rising posts
+pub async fn rising(
+    client: &RedditClient,
+    subreddit: Option<&str>,
+    limit: usize,
+) -> Result<Listing<Submission>> {
+    let path = match subreddit {
+        Some(sub) => format!("/r/{sub}/rising?limit={}", limit),
+        None => format!("/rising?limit={}", limit),
+    };
+    let listing: Listing<Submission> = client.get(&path).await?;
+    Ok(listing)
+}
+
 /// Controversial posts
 pub async fn controversial(
     client: &RedditClient,

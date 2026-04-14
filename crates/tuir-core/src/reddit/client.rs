@@ -6,7 +6,7 @@
 //!
 //! For testing without real API credentials, use `MockRedditClient` from `reddit::mock`.
 
-use crate::reddit::api::{RedditApi, SubmissionPayload};
+use crate::reddit::api::{RedditApi, Sort, SubmissionPayload};
 use crate::reddit::endpoints;
 use crate::reddit::models::{Listing, Message, Submission, Subreddit};
 use anyhow::{anyhow, Result};
@@ -130,8 +130,19 @@ impl Default for RedditClient {
 
 #[async_trait]
 impl RedditApi for RedditClient {
-    async fn hot(&self, subreddit: Option<&str>, limit: usize) -> Result<Listing<Submission>> {
-        endpoints::hot(self, subreddit, limit).await
+    async fn listing(
+        &self,
+        sort: Sort,
+        subreddit: Option<&str>,
+        limit: usize,
+    ) -> Result<Listing<Submission>> {
+        match sort {
+            Sort::Hot => endpoints::hot(self, subreddit, limit).await,
+            Sort::New => endpoints::newest(self, subreddit, limit).await,
+            Sort::Top => endpoints::top(self, subreddit, limit).await,
+            Sort::Controversial => endpoints::controversial(self, subreddit, limit).await,
+            Sort::Rising => endpoints::rising(self, subreddit, limit).await,
+        }
     }
 
     async fn submission(&self, id: &str) -> Result<SubmissionPayload> {
