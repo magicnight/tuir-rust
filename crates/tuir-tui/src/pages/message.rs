@@ -10,6 +10,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
+use tuir_core::content::render_plain_string;
 use tuir_core::reddit::models::Message;
 
 pub struct MessagePage {
@@ -92,7 +93,14 @@ impl crate::pages::Page for MessagePage {
             .style(Style::default().bg(Color::Rgb(25, 25, 35)));
         let body_inner = body_block.inner(chunks[2]);
         frame.render_widget(body_block, chunks[2]);
-        let body = Paragraph::new(self.message.body.clone()).wrap(Wrap { trim: true });
+        let body_text = self
+            .message
+            .body_html
+            .as_deref()
+            .map(render_plain_string)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.message.body.clone());
+        let body = Paragraph::new(body_text).wrap(Wrap { trim: true });
         frame.render_widget(body, body_inner);
 
         let footer = Block::default()
