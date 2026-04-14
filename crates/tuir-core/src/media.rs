@@ -20,7 +20,10 @@
 //! download layer; keeping this module pure means it stays trivially
 //! testable.
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 /// What sort of media a Reddit submission is pointing at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +154,57 @@ fn host_contains(lowered_url: &str, needle: &str) -> bool {
         return host.contains(needle);
     }
     false
+}
+
+/// Map a URL to a deterministic on-disk cache filename.
+///
+/// `<cache_dir>/<sha256-of-url>.bin` — extension is intentionally `.bin`
+/// rather than the source URL's extension because the decoder sniffs the
+/// payload type from the magic bytes, and we don't want a `.gif` URL
+/// that turned out to be a 404 HTML page to look like a gif on disk.
+pub fn cache_path_for(cache_dir: &Path, url: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(url.as_bytes());
+    let digest = hasher.finalize();
+    cache_dir.join(format!("{}.bin", hex::encode(digest)))
+}
+
+/// Download a media URL to the on-disk cache.
+///
+/// Returns the path to the cached file. If the file is already present
+/// (a previous successful download) the network round-trip is skipped
+/// entirely, so repeat previews of the same image are instant. Creates
+/// the cache directory on demand.
+pub async fn download_to_cache(
+    http: &reqwest::Client,
+    url: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf> {
+    let path = cache_path_for(cache_dir, url);
+    if path.exists() {
+        return Ok(path);
+    }
+
+    std::fs::create_dir_all(cache_dir)
+        .with_context(|| format!("create media cache dir {}", cache_dir.display()))?;
+
+    let response = http
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("media URL {url} returned non-2xx"))?;
+
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("read body for {url}"))?;
+
+    std::fs::write(&path, &bytes)
+        .with_context(|| format!("write cache file {}", path.display()))?;
+
+    Ok(path)
 }
 
 /// How the TUI should render media when it knows how to.
@@ -301,5 +355,17 @@ mod tests {
     fn media_style_rejects_unknown_value() {
         assert_eq!(MediaStyle::parse("kitty"), None);
         assert_eq!(MediaStyle::parse("crt"), None);
+    }
+
+    #[test]
+    fn cache_path_is_deterministic_per_url() {
+        let dir = std::path::PathBuf::from("/tmp/tuir/cache");
+        let a = cache_path_for(&dir, "https://i.redd.it/x.jpg");
+        let b = cache_path_for(&dir, "https://i.redd.it/x.jpg");
+        let c = cache_path_for(&dir, "https://i.redd.it/y.jpg");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a.starts_with(&dir));
+        assert_eq!(a.extension().unwrap(), "bin");
     }
 }

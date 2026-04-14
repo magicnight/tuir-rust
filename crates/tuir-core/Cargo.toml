@@ -47,6 +47,10 @@ scraper = "0.26"
 # URL
 url = "2"
 
+# URL hashing for the media on-disk cache
+sha2 = "0.10"
+hex = "0.4"
+
 # Async traits
 async-trait = "0.1"
 

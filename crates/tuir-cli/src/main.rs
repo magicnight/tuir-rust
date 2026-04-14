@@ -631,6 +631,15 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
             let mut next_page = MediaPage::new(media);
             next_page.set_theme(Arc::clone(&page.theme));
             next_page.set_style(config.general.media_style);
+
+            // Kick off the download + decode pipeline immediately so the
+            // first frame the user sees is either a rendered image or a
+            // useful error — not a "loading…" placeholder that never
+            // refreshes (the TUI has no background-task loop yet).
+            let http = reqwest::Client::new();
+            let cache_dir = Config::media_cache_dir();
+            next_page.ensure_loaded(&http, &cache_dir);
+
             Some(AppPage::Media(next_page))
         }
         (AppPage::Subreddit(page), PageKind::Submission) => {

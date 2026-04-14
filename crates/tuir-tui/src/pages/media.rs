@@ -1,15 +1,22 @@
-//! Media preview page (M9 stage 2 — info-only scaffold).
+//! Media preview page (M9.3 — actual inline rendering).
 //!
-//! Currently this page renders metadata about a classified media URL and
-//! displays the URL. Stage 3 will plug in the `image` + `ratatui-image`
-//! pipeline so static images and animated-gif first frames render
-//! inline (with the [`tuir_core::media::MediaStyle::Retro`] half-block
-//! pipeline as an opt-in stylistic choice).
+//! Renders Reddit submission media inline in the terminal via the
+//! `image` + `ratatui-image` pipeline. The first time the user presses
+//! `i` on a submission, this page:
 //!
-//! Splitting the milestone this way keeps every commit independently
-//! verifiable: the page surface, navigation wiring, and key bindings
-//! land here without any heavy image-decoding dependencies, then the
-//! decoder lands on top with the rendering harness already in place.
+//! 1. classifies the URL via [`tuir_core::media::detect_media`]
+//! 2. downloads the bytes to `$XDG_CACHE_HOME/tuir/media/<sha256>.bin`
+//!    (cached forever — repeat opens are zero-network)
+//! 3. decodes the bytes into a [`image::DynamicImage`] (jpeg / png /
+//!    webp / gif first frame are all supported by default features)
+//! 4. constructs a [`ratatui_image::picker::Picker`] for the active
+//!    terminal protocol, optionally forcing half-blocks when the user
+//!    chose [`tuir_core::media::MediaStyle::Retro`]
+//! 5. wraps the result in a [`ratatui_image::protocol::StatefulProtocol`]
+//!    and renders it via [`ratatui_image::StatefulImage`]
+//!
+//! Failures at any stage are captured into a small status enum so the
+//! page can render a useful error message instead of crashing the TUI.
 
 use crate::keymap::KeyAction;
 use crate::pages::{Page, PageAction};
@@ -21,22 +28,50 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
+use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::StatefulImage;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tuir_core::media::{MediaKind, MediaRef, MediaStyle};
+use tuir_core::media::{download_to_cache, MediaKind, MediaRef, MediaStyle};
+
+/// Render-side status for an inline media preview.
+pub enum MediaStatus {
+    /// Page is fresh — `ensure_loaded` has not been called yet, or the
+    /// page is in [`MediaStyle::Off`] mode and intentionally never loads.
+    Idle,
+    /// The download/decode pipeline succeeded; we hold a stateful
+    /// protocol the renderer feeds frames to on every draw.
+    Ready(StatefulProtocol),
+    /// Some stage of the pipeline failed; show the message to the user.
+    Failed(String),
+    /// The classified MediaRef is not something we render inline (video,
+    /// gallery, external link). Tells the user to use mailcap instead.
+    NotInline,
+}
 
 /// Inline media preview page.
 pub struct MediaPage {
     pub media: MediaRef,
     pub style: MediaStyle,
     pub theme: Arc<AppTheme>,
+    pub status: MediaStatus,
+    pub cached_path: Option<PathBuf>,
 }
 
 impl MediaPage {
     pub fn new(media: MediaRef) -> Self {
+        let initial_status = if media.is_inline_renderable() {
+            MediaStatus::Idle
+        } else {
+            MediaStatus::NotInline
+        };
         Self {
             media,
             style: MediaStyle::Auto,
             theme: Arc::new(AppTheme::default()),
+            status: initial_status,
+            cached_path: None,
         }
     }
 
@@ -46,26 +81,91 @@ impl MediaPage {
 
     pub fn set_style(&mut self, style: MediaStyle) {
         self.style = style;
+        if matches!(style, MediaStyle::Off) {
+            self.status = MediaStatus::Idle;
+        }
+    }
+
+    /// Run the download + decode + protocol-construction pipeline.
+    ///
+    /// Synchronous (block_on) by design — the rest of the page stack uses
+    /// the same pattern, and it keeps the navigation transition as a
+    /// single user-perceived step rather than introducing a spinner /
+    /// background-task path that the TUI doesn't have a concept for yet.
+    pub fn ensure_loaded(&mut self, http: &reqwest::Client, cache_dir: &std::path::Path) {
+        if !matches!(self.status, MediaStatus::Idle) {
+            return;
+        }
+        if matches!(self.style, MediaStyle::Off) {
+            return;
+        }
+        if !self.media.is_inline_renderable() {
+            self.status = MediaStatus::NotInline;
+            return;
+        }
+
+        let url = self.media.url.clone();
+        let cache_dir = cache_dir.to_path_buf();
+        let download_result = crate::pages::block_on(async move {
+            download_to_cache(http, &url, &cache_dir).await
+        });
+
+        let path = match download_result {
+            Ok(p) => p,
+            Err(err) => {
+                tracing::error!("media download failed: {err}");
+                self.status = MediaStatus::Failed(format!("download: {err}"));
+                return;
+            }
+        };
+        self.cached_path = Some(path.clone());
+
+        let dyn_image = match image::ImageReader::open(&path)
+            .and_then(|r| r.with_guessed_format())
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r.decode().map_err(anyhow::Error::from))
+        {
+            Ok(img) => img,
+            Err(err) => {
+                tracing::error!("media decode failed for {}: {err}", path.display());
+                self.status = MediaStatus::Failed(format!("decode: {err}"));
+                return;
+            }
+        };
+
+        let mut picker = match Picker::from_query_stdio() {
+            Ok(p) => p,
+            Err(_) => {
+                // Headless / non-tty fallback: pick a reasonable font cell
+                // size so at least the half-blocks renderer has something
+                // to compute against.
+                Picker::from_fontsize((8, 16))
+            }
+        };
+        if matches!(self.style, MediaStyle::Retro) {
+            picker.set_protocol_type(ProtocolType::Halfblocks);
+        }
+
+        let protocol = picker.new_resize_protocol(dyn_image);
+        self.status = MediaStatus::Ready(protocol);
     }
 
     fn kind_label(kind: MediaKind) -> &'static str {
         match kind {
             MediaKind::Image => "Static image",
-            MediaKind::AnimatedGif => "Animated GIF",
+            MediaKind::AnimatedGif => "Animated GIF (first frame)",
             MediaKind::Video => "Video",
             MediaKind::Gallery => "Gallery (multi-image)",
             MediaKind::External => "External link",
         }
     }
 
-    fn renderability_label(&self) -> &'static str {
-        if matches!(self.style, MediaStyle::Off) {
-            return "inline rendering disabled (media_style = off)";
-        }
-        if self.media.is_inline_renderable() {
-            "inline render pending — image decoder lands in M9.3"
-        } else {
-            "not inline-renderable; will hand off to mailcap viewer"
+    fn status_label(&self) -> &'static str {
+        match self.status {
+            MediaStatus::Ready(_) => "rendering inline",
+            MediaStatus::Idle => "loading…",
+            MediaStatus::Failed(_) => "failed",
+            MediaStatus::NotInline => "not inline-renderable; use mailcap to open externally",
         }
     }
 }
@@ -84,8 +184,9 @@ impl Page for MediaPage {
 
         let header = Block::default()
             .title(format!(
-                " ▎ MEDIA • {} ",
-                Self::kind_label(self.media.kind)
+                " ▎ MEDIA • {} • {:?} ",
+                Self::kind_label(self.media.kind),
+                self.style
             ))
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
@@ -98,26 +199,46 @@ impl Page for MediaPage {
         let inner = body_block.inner(chunks[1]);
         frame.render_widget(body_block, chunks[1]);
 
-        let lines = vec![
-            Line::from(vec![
-                Span::styled("URL  ", self.theme.author),
-                Span::raw(self.media.url.clone()),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Kind ", self.theme.author),
-                Span::raw(Self::kind_label(self.media.kind)),
-            ]),
-            Line::from(vec![
-                Span::styled("Style", self.theme.author),
-                Span::raw(format!(" {:?}", self.style)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(self.renderability_label(), self.theme.muted)),
-        ];
-
-        let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-        frame.render_widget(body, inner);
+        match &mut self.status {
+            MediaStatus::Ready(protocol) => {
+                let widget = StatefulImage::default();
+                frame.render_stateful_widget(widget, inner, protocol);
+            }
+            MediaStatus::Idle => {
+                let lines = vec![
+                    Line::from(Span::styled("Loading media…", self.theme.muted)),
+                    Line::from(""),
+                    Line::from(Span::raw(self.media.url.clone())),
+                ];
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+            }
+            MediaStatus::Failed(err) => {
+                let lines = vec![
+                    Line::from(Span::styled(
+                        format!("Failed: {err}"),
+                        self.theme.downvote,
+                    )),
+                    Line::from(""),
+                    Line::from(Span::raw(self.media.url.clone())),
+                ];
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+            }
+            MediaStatus::NotInline => {
+                let lines = vec![
+                    Line::from(vec![
+                        Span::styled("Kind ", self.theme.author),
+                        Span::raw(Self::kind_label(self.media.kind)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("URL  ", self.theme.author),
+                        Span::raw(self.media.url.clone()),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(self.status_label(), self.theme.muted)),
+                ];
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+            }
+        }
 
         let footer = Block::default()
             .title(" ?:Help | q:Back ")
@@ -169,21 +290,20 @@ mod tests {
     }
 
     #[test]
-    fn renderability_label_reflects_style_off() {
-        let mut page = page_with(MediaKind::Image);
-        page.set_style(MediaStyle::Off);
-        assert!(page.renderability_label().contains("disabled"));
-    }
-
-    #[test]
-    fn renderability_label_for_video_says_mailcap() {
+    fn non_inline_kind_starts_in_not_inline_status() {
         let page = page_with(MediaKind::Video);
-        assert!(page.renderability_label().contains("mailcap"));
+        assert!(matches!(page.status, MediaStatus::NotInline));
     }
 
     #[test]
-    fn renderability_label_for_image_under_auto_says_pending() {
+    fn image_kind_starts_idle() {
         let page = page_with(MediaKind::Image);
-        assert!(page.renderability_label().contains("pending"));
+        assert!(matches!(page.status, MediaStatus::Idle));
+    }
+
+    #[test]
+    fn status_label_for_not_inline_mentions_mailcap() {
+        let page = page_with(MediaKind::Gallery);
+        assert!(page.status_label().contains("mailcap"));
     }
 }

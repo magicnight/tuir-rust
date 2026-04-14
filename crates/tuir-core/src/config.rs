@@ -346,6 +346,15 @@ impl Config {
         Self::config_dir().join("themes")
     }
 
+    /// On-disk cache directory for media previews (M9). Defaults to
+    /// `$XDG_CACHE_HOME/tuir/media` on Linux/macOS via `dirs::cache_dir()`.
+    pub fn media_cache_dir() -> PathBuf {
+        dirs::cache_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("tuir")
+            .join("media")
+    }
+
     /// Resolve the configured theme into a parsed [`crate::theme::Theme`].
     ///
     /// Lookup order:
