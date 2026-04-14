@@ -475,25 +475,26 @@ fn parse_callback_query(url: &str, expected_state: &str) -> std::result::Result<
 }
 
 fn auth_output(config: &Config, user: Option<&str>) -> String {
-    let mut lines = vec!["[AUTH] Starting OAuth authentication...".to_string()];
+    use std::fmt::Write as _;
 
+    let mut out = String::new();
+    let _ = writeln!(out, "[AUTH] Starting OAuth authentication...");
     if let Some(user) = user {
-        lines.push(format!("[AUTH] Username: {user}"));
+        let _ = writeln!(out, "[AUTH] Username: {user}");
     }
 
     let client_id = config.reddit.oauth_client_id.clone().unwrap_or_default();
     if client_id.trim().is_empty() {
-        lines.push("[AUTH] OAuth is not configured.".to_string());
-        lines.push(format!(
-            "[AUTH] Add `oauth_client_id` to {}/tuir.cfg",
-            Config::config_dir().display()
-        ));
-        lines.push("[AUTH] Minimum config keys: oauth_client_id, oauth_redirect_uri, oauth_scope".to_string());
-        lines.push(format!(
-            "[AUTH] Token file will be stored at {}",
-            Config::token_file().display()
-        ));
-        return lines.join("\n");
+        let _ = writeln!(
+            out,
+            "[AUTH] OAuth is not configured.\n\
+             [AUTH] Add `oauth_client_id` to {cfg}/tuir.cfg\n\
+             [AUTH] Minimum config keys: oauth_client_id, oauth_redirect_uri, oauth_scope\n\
+             [AUTH] Token file will be stored at {token}",
+            cfg = Config::config_dir().display(),
+            token = Config::token_file().display(),
+        );
+        return out.trim_end().to_string();
     }
 
     let scopes = config
@@ -504,26 +505,20 @@ fn auth_output(config: &Config, user: Option<&str>) -> String {
         .filter(|scope| !scope.is_empty())
         .map(ToOwned::to_owned)
         .collect();
-    let oauth = OAuth::new(
-        client_id,
-        config.reddit.oauth_redirect_uri.clone(),
-        scopes,
+    let oauth = OAuth::new(client_id, config.reddit.oauth_redirect_uri.clone(), scopes);
+
+    let _ = writeln!(
+        out,
+        "[AUTH] Redirect URI: {redirect}\n\
+         [AUTH] Token file: {token}\n\
+         [AUTH] Open the following URL in your browser:\n\
+         \n  \
+         {auth_url}\n",
+        redirect = config.reddit.oauth_redirect_uri,
+        token = Config::token_file().display(),
+        auth_url = oauth.auth_url(),
     );
-
-    lines.push(format!(
-        "[AUTH] Redirect URI: {}",
-        config.reddit.oauth_redirect_uri
-    ));
-    lines.push(format!(
-        "[AUTH] Token file: {}",
-        Config::token_file().display()
-    ));
-    lines.push("[AUTH] Open the following URL in your browser:".to_string());
-    lines.push(String::new());
-    lines.push(format!("  {}", oauth.auth_url()));
-    lines.push(String::new());
-
-    lines.join("\n")
+    out.trim_end().to_string()
 }
 
 /// Open inbox

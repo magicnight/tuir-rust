@@ -203,7 +203,7 @@ tuir-rust/
 ### 🟢 小（半天内可完成）
 
 - ✅ **Comment 深度颜色走主题** — `b978b96` feat(theme): route comment depth colors through AppTheme（`CursorBar1..4` 注入）
-- **`auth_output` 瘦身** — cleanup #1 漏掉的，那一段还是连串 `lines.push(format!(...))`，改成结构化 builder 或 raw string。
+- ✅ **`auth_output` 瘦身** — `writeln!` builder + raw-string 模板，取代 `Vec<String>::join`
 - **`m` 键 mark all read** — Inbox 页的批量已读，调一次 `client.mark_read(name)` 循环。
 - **`s` 键 save submission** — `/api/save` + `/api/unsave`，对应 Submission 的星标。
 - ✅ **GIF 动画帧循环** — `0c66e70` feat(media): animated GIF frame loop with Page::tick hook
