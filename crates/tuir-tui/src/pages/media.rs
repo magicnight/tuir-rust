@@ -50,39 +50,29 @@ const SPINNER_FRAME_DURATION: Duration = Duration::from_millis(80);
 /// so ticks can actually keep up.
 const MIN_FRAME_DELAY: Duration = Duration::from_millis(100);
 
-/// One pre-built frame of an animated GIF: the stateful protocol that
-/// feeds ratatui-image plus the post-clamp delay until the next frame.
 pub struct AnimatedFrame {
-    pub protocol: Box<StatefulProtocol>,
-    pub delay: Duration,
+    protocol: Box<StatefulProtocol>,
+    delay: Duration,
 }
 
-/// State for an animated GIF preview. Frames are pre-built once and
-/// swapped in on `tick` based on wall-clock elapsed time.
 pub struct AnimatedMedia {
-    pub frames: Vec<AnimatedFrame>,
-    pub current: usize,
-    pub last_advance: Instant,
+    frames: Vec<AnimatedFrame>,
+    current: usize,
+    last_advance: Instant,
 }
 
-/// Output of the async download+decode pipeline that the worker thread
-/// hands back to the page via an `mpsc::Receiver`. Picker construction
-/// stays on the main thread (it may query stdio), so the worker only
-/// delivers raw pixel data.
-pub enum LoadedPixels {
-    /// Static single-frame image — jpg/png/webp/first gif frame.
+/// Worker-thread output: picker construction stays on the main thread
+/// (may query stdio), so workers only deliver raw pixels.
+enum LoadedPixels {
     Still(image::DynamicImage),
-    /// All composited frames of an animated GIF, each with its (already
-    /// clamped) display delay.
     Gif(Vec<(image::DynamicImage, Duration)>),
 }
 
-pub type LoadResult = Result<LoadedPixels, String>;
+type LoadResult = Result<LoadedPixels, String>;
 
-/// Live state for an in-flight download + decode operation.
 pub struct DownloadInFlight {
-    pub started_at: Instant,
-    pub rx: Receiver<LoadResult>,
+    started_at: Instant,
+    rx: Receiver<LoadResult>,
 }
 
 /// Render-side status for an inline media preview.
@@ -145,15 +135,10 @@ impl MediaPage {
         }
     }
 
-    /// Kick off the download + decode pipeline on a background worker
-    /// thread and immediately return, leaving the page in
-    /// `Downloading` state. The event-loop `tick()` will poll the
-    /// channel and transition to `Ready`/`Animated`/`Failed` once the
-    /// worker posts its result.
-    ///
-    /// Safe to call repeatedly: any call while a download is already
-    /// in flight or after it completes is a no-op. Must be called
-    /// before the first render so the spinner is visible from frame 0.
+    /// Non-blocking: spawns a worker thread, returns with the page in
+    /// `Downloading` state. `tick()` polls the channel each iteration
+    /// and transitions to `Ready`/`Animated`/`Failed` on completion.
+    /// Second and later calls are no-ops.
     pub fn start_download(&mut self, http: &reqwest::Client, cache_dir: &Path) {
         if !matches!(self.status, MediaStatus::Idle) {
             return;
@@ -249,24 +234,30 @@ impl MediaPage {
     }
 }
 
-/// Walk the frame index forward based on `elapsed`, consuming per-frame
-/// delays. Returns the new index if it changed, or `None` when the
-/// animation has not yet crossed the next-frame boundary. Factored out
-/// of `MediaPage::tick` so it is testable without building real
-/// ratatui-image `StatefulProtocol` instances.
-fn advance_gif_index(delays: &[Duration], current: usize, mut elapsed: Duration) -> Option<usize> {
-    if delays.is_empty() {
+/// Walk the frame index forward based on `elapsed`. Returns the new
+/// index if it changed, or `None` when the animation has not yet
+/// crossed the next-frame boundary. Takes a `delay_of` closure so
+/// callers can avoid collecting per-frame delays into a scratch Vec
+/// on every tick — the live `MediaPage::tick` path indexes into
+/// `anim.frames` directly while tests pass in a slice closure.
+fn advance_gif_index(
+    frame_count: usize,
+    current: usize,
+    mut elapsed: Duration,
+    delay_of: impl Fn(usize) -> Duration,
+) -> Option<usize> {
+    if frame_count == 0 {
         return None;
     }
-    let mut idx = current.min(delays.len() - 1);
+    let mut idx = current.min(frame_count - 1);
     let mut advanced = false;
     loop {
-        let d = delays[idx];
+        let d = delay_of(idx);
         if elapsed < d {
             break;
         }
         elapsed -= d;
-        idx = (idx + 1) % delays.len();
+        idx = (idx + 1) % frame_count;
         advanced = true;
     }
     advanced.then_some(idx)
@@ -497,10 +488,6 @@ impl Page for MediaPage {
     /// past several 100ms slots) so the animation's speed reflects
     /// real time rather than tick count.
     fn tick(&mut self) {
-        // Downloading: non-blocking check whether the worker thread
-        // has posted a result. On Empty we stay in Downloading so the
-        // spinner keeps rotating; on Disconnected (worker panicked)
-        // we surface the failure.
         if let MediaStatus::Downloading(info) = &self.status {
             match info.rx.try_recv() {
                 Ok(Ok(pixels)) => {
@@ -519,10 +506,12 @@ impl Page for MediaPage {
         }
 
         if let MediaStatus::Animated(anim) = &mut self.status {
-            let delays: Vec<Duration> = anim.frames.iter().map(|f| f.delay).collect();
-            if let Some(next) =
-                advance_gif_index(&delays, anim.current, anim.last_advance.elapsed())
-            {
+            if let Some(next) = advance_gif_index(
+                anim.frames.len(),
+                anim.current,
+                anim.last_advance.elapsed(),
+                |i| anim.frames[i].delay,
+            ) {
                 anim.current = next;
                 anim.last_advance = Instant::now();
             }
@@ -571,39 +560,36 @@ mod tests {
         assert!(page.status_label().contains("mailcap"));
     }
 
+    fn walk(delays: &[Duration], current: usize, elapsed: Duration) -> Option<usize> {
+        advance_gif_index(delays.len(), current, elapsed, |i| delays[i])
+    }
+
     #[test]
     fn advance_gif_index_returns_none_when_elapsed_below_delay() {
-        let delays = vec![Duration::from_millis(100), Duration::from_millis(100)];
-        assert_eq!(advance_gif_index(&delays, 0, Duration::from_millis(50)), None);
+        let delays = [Duration::from_millis(100), Duration::from_millis(100)];
+        assert_eq!(walk(&delays, 0, Duration::from_millis(50)), None);
     }
 
     #[test]
     fn advance_gif_index_steps_single_frame() {
-        let delays = vec![Duration::from_millis(100), Duration::from_millis(100)];
-        assert_eq!(
-            advance_gif_index(&delays, 0, Duration::from_millis(120)),
-            Some(1)
-        );
+        let delays = [Duration::from_millis(100), Duration::from_millis(100)];
+        assert_eq!(walk(&delays, 0, Duration::from_millis(120)), Some(1));
     }
 
     #[test]
     fn advance_gif_index_wraps_and_skips_when_behind() {
-        // Three frames of 100ms each; 350ms elapsed from index 0 should
-        // skip past frames 1 and 2 and land back on 0 with leftover.
-        let delays = vec![
+        // 3×100ms; 350ms should skip past 1 and 2, landing back on 0.
+        let delays = [
             Duration::from_millis(100),
             Duration::from_millis(100),
             Duration::from_millis(100),
         ];
-        assert_eq!(
-            advance_gif_index(&delays, 0, Duration::from_millis(350)),
-            Some(0)
-        );
+        assert_eq!(walk(&delays, 0, Duration::from_millis(350)), Some(0));
     }
 
     #[test]
     fn advance_gif_index_empty_delays_is_none() {
-        assert_eq!(advance_gif_index(&[], 0, Duration::from_millis(999)), None);
+        assert_eq!(walk(&[], 0, Duration::from_millis(999)), None);
     }
 
     /// End-to-end: build a 2-frame GIF in a tempfile via `image`'s
