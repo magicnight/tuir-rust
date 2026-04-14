@@ -226,6 +226,7 @@ impl crate::pages::Page for SubredditPage {
             &self.submissions,
             &self.vote_states,
             &mut self.list_state,
+            &self.theme,
         );
 
         // Footer
