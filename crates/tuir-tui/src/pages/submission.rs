@@ -13,7 +13,7 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tuir_core::reddit::models::{Comment, CommentReplies, Submission};
-use tuir_core::reddit::MockRedditClient;
+use tuir_core::reddit::{MockRedditClient, RedditApi};
 
 /// Flattened comment node for display
 #[derive(Debug, Clone)]
@@ -56,20 +56,24 @@ pub struct SubmissionPage {
     pub flattened: Vec<usize>, // indices into comments that are currently visible
     pub list_state: ListState,
     pub vote_state: VoteState,
-    pub client: Arc<MockRedditClient>,
+    pub client: Arc<dyn RedditApi>,
     pub loading: bool,
 }
 
 impl SubmissionPage {
     /// Create a new submission page
     pub fn new(submission: Submission) -> Self {
+        Self::with_client(submission, Arc::new(MockRedditClient::new()))
+    }
+
+    pub fn with_client(submission: Submission, client: Arc<dyn RedditApi>) -> Self {
         Self {
             submission,
             comments: Vec::new(),
             flattened: Vec::new(),
             list_state: ListState::default(),
             vote_state: VoteState::None,
-            client: Arc::new(MockRedditClient::new()),
+            client,
             loading: false,
         }
     }
@@ -78,7 +82,14 @@ impl SubmissionPage {
     pub async fn load(&mut self) {
         self.loading = true;
 
-        let resp = self.client.submission(&self.submission.id).await;
+        let resp = match self.client.submission(&self.submission.id).await {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::error!("failed to load submission: {err}");
+                self.loading = false;
+                return;
+            }
+        };
         self.submission = resp.submission;
         self.vote_state = match self.submission.likes.map(i8::from).unwrap_or(0) {
             1 => VoteState::Up,
@@ -209,7 +220,9 @@ impl SubmissionPage {
         let client = Arc::clone(&self.client);
         let name = self.submission.name.clone();
         crate::pages::block_on(async move {
-            client.vote(&name, direction).await;
+            if let Err(err) = client.vote(&name, direction).await {
+                tracing::error!("vote failed: {err}");
+            }
         });
     }
 

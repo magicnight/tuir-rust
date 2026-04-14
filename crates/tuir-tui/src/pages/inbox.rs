@@ -12,24 +12,28 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tuir_core::reddit::models::Message;
-use tuir_core::reddit::MockRedditClient;
+use tuir_core::reddit::{MockRedditClient, RedditApi};
 
 /// Inbox page state
 pub struct InboxPage {
     pub messages: Vec<Message>,
     pub list_state: ListState,
     pub loading: bool,
-    pub client: Arc<MockRedditClient>,
+    pub client: Arc<dyn RedditApi>,
 }
 
 impl InboxPage {
     /// Create a new inbox page
     pub fn new() -> Self {
+        Self::with_client(Arc::new(MockRedditClient::new()))
+    }
+
+    pub fn with_client(client: Arc<dyn RedditApi>) -> Self {
         Self {
             messages: Vec::new(),
             list_state: ListState::default(),
             loading: false,
-            client: Arc::new(MockRedditClient::new()),
+            client,
         }
     }
 
@@ -37,7 +41,14 @@ impl InboxPage {
     pub async fn load(&mut self) {
         self.loading = true;
 
-        let listing = self.client.inbox().await;
+        let listing = match self.client.inbox().await {
+            Ok(listing) => listing,
+            Err(err) => {
+                tracing::error!("failed to load inbox: {err}");
+                self.loading = false;
+                return;
+            }
+        };
         self.messages = listing.data.children.into_iter().map(|c| c.data).collect();
 
         if !self.messages.is_empty() {
@@ -67,7 +78,9 @@ impl InboxPage {
         let name = message.name.clone();
         let client = Arc::clone(&self.client);
         crate::pages::block_on(async move {
-            client.mark_read(&name).await;
+            if let Err(err) = client.mark_read(&name).await {
+                tracing::error!("mark_read failed: {err}");
+            }
         });
 
         PageAction::Switch(crate::pages::PageKind::Message)
@@ -86,10 +99,13 @@ impl InboxPage {
         let mark_unread = message.new;
         let client = Arc::clone(&self.client);
         crate::pages::block_on(async move {
-            if mark_unread {
-                client.mark_unread(&name).await;
+            let result = if mark_unread {
+                client.mark_unread(&name).await
             } else {
-                client.mark_read(&name).await;
+                client.mark_read(&name).await
+            };
+            if let Err(err) = result {
+                tracing::error!("toggle read-state failed: {err}");
             }
         });
     }

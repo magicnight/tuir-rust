@@ -12,7 +12,7 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tuir_core::reddit::models::Submission;
-use tuir_core::reddit::MockRedditClient;
+use tuir_core::reddit::{MockRedditClient, RedditApi};
 
 /// Subreddit page state
 pub struct SubredditPage {
@@ -22,11 +22,15 @@ pub struct SubredditPage {
     pub vote_states: Vec<VoteState>,
     pub list_state: ListState,
     pub loading: bool,
-    pub client: Arc<MockRedditClient>,
+    pub client: Arc<dyn RedditApi>,
 }
 
 impl SubredditPage {
     pub fn new(name: &str) -> Self {
+        Self::with_client(name, Arc::new(MockRedditClient::new()))
+    }
+
+    pub fn with_client(name: &str, client: Arc<dyn RedditApi>) -> Self {
         Self {
             name: name.to_string(),
             sort: SortOrder::Hot,
@@ -34,7 +38,7 @@ impl SubredditPage {
             vote_states: Vec::new(),
             list_state: ListState::default(),
             loading: false,
-            client: Arc::new(MockRedditClient::new()),
+            client,
         }
     }
 
@@ -56,7 +60,14 @@ impl SubredditPage {
             Some(self.name.as_str())
         };
 
-        let listing = self.client.hot(sub, 50).await;
+        let listing = match self.client.hot(sub, 50).await {
+            Ok(listing) => listing,
+            Err(err) => {
+                tracing::error!("failed to load subreddit listing: {err}");
+                self.loading = false;
+                return;
+            }
+        };
         self.submissions = listing.data.children.into_iter().map(|c| c.data).collect();
         self.vote_states = self
             .submissions
@@ -137,7 +148,9 @@ impl SubredditPage {
                 let client = Arc::clone(&self.client);
                 let name = sub.name.clone();
                 crate::pages::block_on(async move {
-                    client.vote(&name, direction).await;
+                    if let Err(err) = client.vote(&name, direction).await {
+                        tracing::error!("vote failed: {err}");
+                    }
                 });
             }
         }

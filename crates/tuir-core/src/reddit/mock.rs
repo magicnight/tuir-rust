@@ -2,7 +2,10 @@
 //!
 //! Provides fake data that mirrors Reddit's API response structure.
 
+use crate::reddit::api::{RedditApi, SubmissionPayload};
 use crate::reddit::models::{Comment, Listing, ListingData, Message, Submission, Subreddit, Thing};
+use anyhow::Result;
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -269,6 +272,44 @@ impl Default for MockRedditClient {
 pub struct MockSubmissionResponse {
     pub submission: Submission,
     pub comments: Vec<Comment>,
+}
+
+#[async_trait]
+impl RedditApi for MockRedditClient {
+    async fn hot(&self, subreddit: Option<&str>, limit: usize) -> Result<Listing<Submission>> {
+        Ok(MockRedditClient::hot(self, subreddit, limit).await)
+    }
+
+    async fn submission(&self, id: &str) -> Result<SubmissionPayload> {
+        let resp = MockRedditClient::submission(self, id).await;
+        Ok(SubmissionPayload {
+            submission: resp.submission,
+            comments: resp.comments,
+        })
+    }
+
+    async fn vote(&self, id: &str, direction: i8) -> Result<()> {
+        MockRedditClient::vote(self, id, direction).await;
+        Ok(())
+    }
+
+    async fn inbox(&self) -> Result<Listing<Message>> {
+        Ok(MockRedditClient::inbox(self).await)
+    }
+
+    async fn mark_read(&self, id: &str) -> Result<()> {
+        MockRedditClient::mark_read(self, id).await;
+        Ok(())
+    }
+
+    async fn mark_unread(&self, id: &str) -> Result<()> {
+        MockRedditClient::mark_unread(self, id).await;
+        Ok(())
+    }
+
+    async fn subscribed(&self, limit: usize) -> Result<Listing<Subreddit>> {
+        Ok(MockRedditClient::subscribed(self, limit).await)
+    }
 }
 
 fn stable_offset(seed: &str, modulo: i64) -> i64 {

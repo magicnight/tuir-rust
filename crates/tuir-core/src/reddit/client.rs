@@ -6,7 +6,11 @@
 //!
 //! For testing without real API credentials, use `MockRedditClient` from `reddit::mock`.
 
+use crate::reddit::api::{RedditApi, SubmissionPayload};
+use crate::reddit::endpoints;
+use crate::reddit::models::{Listing, Message, Submission, Subreddit};
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -121,6 +125,54 @@ impl RedditClient {
 impl Default for RedditClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[async_trait]
+impl RedditApi for RedditClient {
+    async fn hot(&self, subreddit: Option<&str>, limit: usize) -> Result<Listing<Submission>> {
+        endpoints::hot(self, subreddit, limit).await
+    }
+
+    async fn submission(&self, id: &str) -> Result<SubmissionPayload> {
+        let resp = endpoints::submission(self, id).await?;
+        let submission = resp
+            .submission_listing
+            .data
+            .children
+            .into_iter()
+            .next()
+            .map(|thing| thing.data)
+            .ok_or_else(|| anyhow!("submission listing is empty"))?;
+        let comments = resp
+            .comment_listing
+            .data
+            .children
+            .into_iter()
+            .map(|thing| thing.data)
+            .collect();
+        Ok(SubmissionPayload { submission, comments })
+    }
+
+    async fn vote(&self, id: &str, direction: i8) -> Result<()> {
+        endpoints::vote(self, id, direction).await
+    }
+
+    async fn inbox(&self) -> Result<Listing<Message>> {
+        endpoints::inbox(self).await
+    }
+
+    async fn mark_read(&self, id: &str) -> Result<()> {
+        endpoints::read_message(self, id).await
+    }
+
+    async fn mark_unread(&self, _id: &str) -> Result<()> {
+        // Reddit's /api/unread_message is not yet wired in endpoints.rs.
+        Err(anyhow!("mark_unread not implemented for real client"))
+    }
+
+    async fn subscribed(&self, limit: usize) -> Result<Listing<Subreddit>> {
+        endpoints::subscribed(self, limit).await
     }
 }
 

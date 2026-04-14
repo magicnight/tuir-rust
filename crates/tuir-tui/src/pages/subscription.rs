@@ -12,24 +12,28 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tuir_core::reddit::models::Subreddit;
-use tuir_core::reddit::MockRedditClient;
+use tuir_core::reddit::{MockRedditClient, RedditApi};
 
 /// Subscription page state
 pub struct SubscriptionPage {
     pub subreddits: Vec<Subreddit>,
     pub list_state: ListState,
     pub loading: bool,
-    pub client: Arc<MockRedditClient>,
+    pub client: Arc<dyn RedditApi>,
 }
 
 impl SubscriptionPage {
     /// Create a new subscription page
     pub fn new() -> Self {
+        Self::with_client(Arc::new(MockRedditClient::new()))
+    }
+
+    pub fn with_client(client: Arc<dyn RedditApi>) -> Self {
         Self {
             subreddits: Vec::new(),
             list_state: ListState::default(),
             loading: false,
-            client: Arc::new(MockRedditClient::new()),
+            client,
         }
     }
 
@@ -37,7 +41,14 @@ impl SubscriptionPage {
     pub async fn load(&mut self) {
         self.loading = true;
 
-        let listing = self.client.subscribed(50).await;
+        let listing = match self.client.subscribed(50).await {
+            Ok(listing) => listing,
+            Err(err) => {
+                tracing::error!("failed to load subscriptions: {err}");
+                self.loading = false;
+                return;
+            }
+        };
         self.subreddits = listing.data.children.into_iter().map(|c| c.data).collect();
 
         if !self.subreddits.is_empty() {
