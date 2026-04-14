@@ -6,7 +6,10 @@ use crossterm::{
     event::{self, Event, KeyEventKind},
     terminal::size as terminal_size,
 };
+use std::sync::Arc;
 use std::time::Duration;
+use tuir_core::oauth::StoredToken;
+use tuir_core::reddit::{MockRedditClient, RedditApi, RedditClient};
 use tuir_core::{config::Config, OAuth};
 use tuir_tui::pages::{
     help::HelpPage, inbox::InboxPage, message::MessagePage, submission::SubmissionPage,
@@ -250,6 +253,42 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Build a Reddit client backend based on config + persisted token state.
+///
+/// Returns a real [`RedditClient`] with a fresh access token when a valid
+/// token is on disk; otherwise falls back to [`MockRedditClient`] so the TUI
+/// still starts without credentials.
+fn build_client(config: &Config) -> Arc<dyn RedditApi> {
+    let token_path = Config::token_file();
+    if !token_path.exists() {
+        tracing::debug!("no token file at {:?}, using mock client", token_path);
+        return Arc::new(MockRedditClient::new());
+    }
+
+    let token = match StoredToken::load(&token_path) {
+        Ok(token) => token,
+        Err(err) => {
+            tracing::warn!("failed to load token file: {err}; falling back to mock");
+            return Arc::new(MockRedditClient::new());
+        }
+    };
+
+    if token.is_expired() {
+        tracing::warn!("stored token is expired; falling back to mock (refresh not wired yet)");
+        return Arc::new(MockRedditClient::new());
+    }
+
+    if config.reddit.oauth_client_id.as_deref().unwrap_or("").is_empty() {
+        tracing::warn!("oauth_client_id missing from config; falling back to mock");
+        return Arc::new(MockRedditClient::new());
+    }
+
+    let mut client = RedditClient::new();
+    client.set_token(token.access_token);
+    tracing::info!("using real Reddit client backed by stored token");
+    Arc::new(client)
+}
+
 /// Enter TUI mode
 fn do_tui(subreddit: Option<&str>) -> Result<()> {
     println!("[TUI] Starting terminal interface...");
@@ -257,7 +296,9 @@ fn do_tui(subreddit: Option<&str>) -> Result<()> {
         println!("[TUI] Opening r/{}", sub);
     }
 
-    let mut page = SubredditPage::new(subreddit.unwrap_or(""));
+    let config = Config::load().unwrap_or_default();
+    let client = build_client(&config);
+    let mut page = SubredditPage::with_client(subreddit.unwrap_or(""), client);
     page.load_sync();
     run_app(AppPage::Subreddit(page))?;
 
@@ -332,7 +373,9 @@ fn do_inbox(subreddit: Option<&str>) -> Result<()> {
         println!("[INBOX] Ignoring subreddit filter for inbox: r/{}", sub);
     }
 
-    let mut page = InboxPage::new();
+    let config = Config::load().unwrap_or_default();
+    let client = build_client(&config);
+    let mut page = InboxPage::with_client(client);
     page.load_sync();
     run_app(AppPage::Inbox(page))?;
     Ok(())
@@ -342,7 +385,9 @@ fn do_inbox(subreddit: Option<&str>) -> Result<()> {
 fn do_subscriptions() -> Result<()> {
     println!("[SUBS] Listing subscriptions...");
 
-    let mut page = SubscriptionPage::new();
+    let config = Config::load().unwrap_or_default();
+    let client = build_client(&config);
+    let mut page = SubscriptionPage::with_client(client);
     page.load_sync();
     run_app(AppPage::Subscription(page))?;
     Ok(())
@@ -422,14 +467,14 @@ fn build_switched_page(current_page: &AppPage, kind: PageKind) -> Option<AppPage
         (AppPage::Subreddit(page), PageKind::Submission) => {
             let idx = page.list_state.selected()?;
             let submission = page.submissions.get(idx)?.clone();
-            let mut next_page = SubmissionPage::new(submission);
+            let mut next_page = SubmissionPage::with_client(submission, Arc::clone(&page.client));
             next_page.load_sync();
             Some(AppPage::Submission(next_page))
         }
         (AppPage::Subscription(page), PageKind::Subreddit) => {
             let idx = page.list_state.selected()?;
             let subreddit = page.subreddits.get(idx)?.display_name.clone();
-            let mut next_page = SubredditPage::new(&subreddit);
+            let mut next_page = SubredditPage::with_client(&subreddit, Arc::clone(&page.client));
             next_page.load_sync();
             Some(AppPage::Subreddit(next_page))
         }
